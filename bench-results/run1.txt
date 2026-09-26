@@ -1,0 +1,148 @@
+
+== 100 entries ==   (ns per op: min / median / max)
+  memory, bytes per entry including key strings (14 key bytes/entry):
+    merkle-champ       94.3
+    imbl HashMap      195.9
+    imbl OrdMap        60.9
+    std HashMap        53.3
+  lookup (hit)
+  merkle-champ                                            14.6        14.9        15.6
+  imbl HashMap (fixed hasher)                             17.9        18.0        18.4
+  imbl OrdMap                                             30.1        33.5        49.5
+  std HashMap                                             11.8        11.9        12.5
+  lookup (miss)
+  merkle-champ                                             9.0         9.2        10.7
+  imbl HashMap (fixed hasher)                             17.5        17.7        19.8
+  imbl OrdMap                                             19.6        19.8        21.1
+  persistent write (previous version kept alive)
+  merkle-champ                                           570.5       572.6       577.6
+  imbl HashMap (fixed hasher)                            540.1       543.2       560.3
+  imbl OrdMap                                            602.0       604.6       610.4
+  std HashMap, clone per write (floor)                  2305.9      2312.2      2368.2
+  in-place write (sole owner)
+  merkle-champ                                            39.0        39.1        39.2
+  imbl HashMap (fixed hasher)                             49.8        49.8        49.9
+  imbl OrdMap                                             81.9        82.3        84.2
+  persistent delete
+  merkle-champ                                           662.6       664.3       665.3
+  imbl HashMap (fixed hasher)                            532.4       533.9       534.6
+  imbl OrdMap                                            584.3       587.7       610.6
+  list one namespace (1 entries)
+  merkle-champ flat (filter all)                         361.0       403.0      1068.0
+  merkle-champ nested (one map per namespace)             48.0        51.0       147.0
+  imbl OrdMap range scan                                  70.0        84.0       304.0
+  imbl HashMap (filter all)                              434.0       476.0      1112.0
+  identity of the whole map
+  merkle-champ first identity (cold)                    5430.0      5551.0      5672.0
+  merkle-champ identity after one write                 1536.8      1539.8      1574.6
+  imbl HashMap layered identity (sort+hash all)         4469.8      4516.2      4765.8
+  imbl OrdMap layered identity (hash all, sorted)       2958.8      2973.5      3074.2
+  diff, 1 changed entries
+  merkle-champ structural diff                           221.0       225.0       396.0
+  imbl OrdMap diff                                       162.0       179.0       358.0
+  imbl HashMap layered diff (scan both)                 4119.0      4168.0      5147.0
+  diff, 100 changed entries
+  merkle-champ structural diff                          2629.0      2789.0      4569.0
+  imbl OrdMap diff                                       920.0       952.0      1389.0
+  imbl HashMap layered diff (scan both)                 4144.0      4483.0      5125.0
+
+== 10000 entries ==   (ns per op: min / median / max)
+  memory, bytes per entry including key strings (14 key bytes/entry):
+    merkle-champ       86.7
+    imbl HashMap       89.5
+    imbl OrdMap        83.3
+    std HashMap        67.0
+  lookup (hit)
+  merkle-champ                                            30.7        31.0        35.8
+  imbl HashMap (fixed hasher)                             28.7        29.0        29.3
+  imbl OrdMap                                            128.6       133.2       149.3
+  std HashMap                                             18.8        19.7        23.2
+  lookup (miss)
+  merkle-champ                                            15.6        15.8        17.5
+  imbl HashMap (fixed hasher)                             16.4        16.6        17.4
+  imbl OrdMap                                             39.0        39.3        41.0
+  persistent write (previous version kept alive)
+  merkle-champ                                          1084.2      1091.2      1121.6
+  imbl HashMap (fixed hasher)                            956.7       972.3      1026.4
+  imbl OrdMap                                           1371.3      1379.9      1406.2
+  std HashMap, clone per write (floor)                224722.2    227421.3    233827.0
+  in-place write (sole owner)
+  merkle-champ                                            53.3        55.4        68.8
+  imbl HashMap (fixed hasher)                             59.3        60.7        63.9
+  imbl OrdMap                                            189.4       192.9       196.6
+  persistent delete
+  merkle-champ                                          1153.8      1168.1      1258.0
+  imbl HashMap (fixed hasher)                            948.6       958.6      1023.0
+  imbl OrdMap                                           1327.8      1351.3      1358.5
+  list one namespace (156 entries)
+  merkle-champ flat (filter all)                       53404.0     54859.0     61185.0
+  merkle-champ nested (one map per namespace)            324.0       410.0      1116.0
+  imbl OrdMap range scan                                 687.0       694.0      1353.0
+  imbl HashMap (filter all)                            56851.0     58893.0     62176.0
+  identity of the whole map
+  merkle-champ first identity (cold)                  450446.0    455919.0    502735.0
+  merkle-champ identity after one write                 2894.6      2971.5      3026.0
+  imbl HashMap layered identity (sort+hash all)       692667.5    695907.8    701584.8
+  imbl OrdMap layered identity (hash all, sorted)     238104.2    240386.8    244494.8
+  diff, 1 changed entries
+  merkle-champ structural diff                           419.0       463.0       633.0
+  imbl OrdMap diff                                       467.0       481.0       904.0
+  imbl HashMap layered diff (scan both)               441974.0    457072.0    466488.0
+  diff, 100 changed entries
+  merkle-champ structural diff                         16248.0     16805.0     22785.0
+  imbl OrdMap diff                                     15627.0     17259.0     18471.0
+  imbl HashMap layered diff (scan both)               451055.0    453857.0    481669.0
+  diff, 10000 changed entries
+  merkle-champ structural diff                        364757.0    369850.0    409288.0
+  imbl OrdMap diff                                    136456.0    139713.0    150749.0
+  imbl HashMap layered diff (scan both)               601841.0    611644.0    620500.0
+
+== 1000000 entries ==   (ns per op: min / median / max)
+  memory, bytes per entry including key strings (26 key bytes/entry):
+    merkle-champ       97.4
+    imbl HashMap      180.8
+    imbl OrdMap        87.2
+    std HashMap        84.1
+  lookup (hit)
+  merkle-champ                                            60.9        63.0        90.4
+  imbl HashMap (fixed hasher)                             48.2        51.0        87.6
+  imbl OrdMap                                           1060.0      1259.8      1542.7
+  std HashMap                                             23.0        23.6        24.8
+  lookup (miss)
+  merkle-champ                                            28.5        29.6        44.0
+  imbl HashMap (fixed hasher)                             26.5        27.9        43.6
+  imbl OrdMap                                             63.1        64.1        69.0
+  persistent write (previous version kept alive)
+  merkle-champ                                          2227.1      2365.8      2588.1
+  imbl HashMap (fixed hasher)                           3271.4      3351.2      3876.3
+  imbl OrdMap                                           3541.2      3835.5      4329.7
+  in-place write (sole owner)
+  merkle-champ                                            76.4        77.4       320.5
+  imbl HashMap (fixed hasher)                             75.8        76.8       318.0
+  imbl OrdMap                                            422.4       441.5       638.8
+  persistent delete
+  merkle-champ                                          3073.5      3325.0      3565.4
+  imbl HashMap (fixed hasher)                           3150.3      3420.2      3673.1
+  imbl OrdMap                                           3712.0      3998.7      4405.4
+  list one namespace (15625 entries)
+  merkle-champ flat (filter all)                    37823677.0  38030501.0  38962719.0
+  merkle-champ nested (one map per namespace)          64304.0     83890.0    133558.0
+  imbl OrdMap range scan                              589659.0    646789.0    706711.0
+  imbl HashMap (filter all)                         48672636.0  49245456.0  50338207.0
+  identity of the whole map
+  merkle-champ first identity (cold)               175293628.0 182815514.0 186004239.0
+  merkle-champ identity after one write                 7160.1      7567.8      8615.8
+  imbl HashMap layered identity (sort+hash all)    381125053.5 390246379.5 396500635.2
+  imbl OrdMap layered identity (hash all, sorted)   95769503.0  97874829.5 100029652.8
+  diff, 1 changed entries
+  merkle-champ structural diff                          1025.0      1210.0      1520.0
+  imbl OrdMap diff                                       896.0       927.0      1404.0
+  imbl HashMap layered diff (scan both)            336101372.0 340868712.0 356255073.0
+  diff, 100 changed entries
+  merkle-champ structural diff                         54355.0     59427.0    108829.0
+  imbl OrdMap diff                                     58482.0     60716.0     81667.0
+  imbl HashMap layered diff (scan both)            337653340.0 352880258.0 359341711.0
+  diff, 10000 changed entries
+  merkle-champ structural diff                       9416051.0   9510481.0   9734608.0
+  imbl OrdMap diff                                   9352986.0   9483067.0   9652207.0
+  imbl HashMap layered diff (scan both)            317888477.0 330748684.0 338262750.0

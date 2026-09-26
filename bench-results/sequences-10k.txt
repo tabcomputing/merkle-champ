@@ -1,0 +1,91 @@
+
+== Part A: 10000 entries, 10000 edits per trace, 3 reps (median [min-max]) ==
+  champ         cold   spread    every      1 | total      30.46 ms [29.81-31.04] | updates     13.48 | identity      16.98 (10001 req, max    0.006 ms) | peak     0.9 MB | diff    0.001 ms
+  champ         cold   spread    every    100 | total      14.80 ms [14.63-15.22] | updates      7.91 | identity       6.72 (  101 req, max    0.076 ms) | peak     1.2 MB | diff    0.031 ms
+  champ         cold   spread    every  10000 | total       4.48 ms [4.37-4.78] | updates      3.95 | identity       0.53 (    2 req, max    0.532 ms) | peak     0.9 MB | diff    0.103 ms
+  champ         cold   spread    every    end | total       4.46 ms [4.26-4.52] | updates      3.99 | identity       0.53 (    1 req, max    0.531 ms) | peak     0.9 MB | diff    0.104 ms
+  champ         cold   clustered every      1 | total      26.56 ms [26.54-27.04] | updates     11.22 | identity      15.33 (10001 req, max    0.005 ms) | peak     0.4 MB | diff    0.001 ms
+  champ         cold   clustered every    100 | total       4.36 ms [4.31-4.40] | updates      3.48 | identity       0.88 (  101 req, max    0.016 ms) | peak     0.4 MB | diff    0.004 ms
+  champ         cold   clustered every  10000 | total       3.15 ms [3.13-3.17] | updates      2.98 | identity       0.18 (    2 req, max    0.176 ms) | peak     0.3 MB | diff    0.061 ms
+  champ         cold   clustered every    end | total       3.12 ms [3.12-3.14] | updates      2.94 | identity       0.18 (    1 req, max    0.179 ms) | peak     0.3 MB | diff    0.061 ms
+  champ         cached spread    every      1 | total      28.69 ms [28.67-28.87] | updates     12.39 | identity      16.28 (10001 req, max    0.008 ms) | peak     0.9 MB | diff    0.002 ms
+  champ         cached spread    every    100 | total      14.24 ms [14.23-14.25] | updates      7.62 | identity       6.62 (  101 req, max    0.074 ms) | peak     1.2 MB | diff    0.031 ms
+  champ         cached spread    every  10000 | total       4.18 ms [4.18-4.21] | updates      3.67 | identity       0.51 (    2 req, max    0.508 ms) | peak     0.9 MB | diff    0.098 ms
+  champ         cached spread    every    end | total       4.21 ms [4.19-4.24] | updates      3.68 | identity       0.51 (    1 req, max    0.506 ms) | peak     0.9 MB | diff    0.096 ms
+  champ         cached clustered every      1 | total      26.46 ms [26.43-26.65] | updates     11.18 | identity      15.24 (10001 req, max    0.005 ms) | peak     0.4 MB | diff    0.002 ms
+  champ         cached clustered every    100 | total       4.33 ms [4.32-4.34] | updates      3.44 | identity       0.88 (  101 req, max    0.015 ms) | peak     0.4 MB | diff    0.005 ms
+  champ         cached clustered every  10000 | total       3.13 ms [3.12-3.13] | updates      2.94 | identity       0.18 (    2 req, max    0.185 ms) | peak     0.3 MB | diff    0.064 ms
+  champ         cached clustered every    end | total       3.13 ms [3.13-3.13] | updates      2.95 | identity       0.18 (    1 req, max    0.179 ms) | peak     0.3 MB | diff    0.061 ms
+  champ         initial identity (cold, reported separately): 0.54 ms
+  champ         window of 8 checkpoints, spread, every 100: peak 2.0 MB, total 15.28 ms
+  champ         history-independent identity: verified
+  imbl-nscache  cold   spread    every      1 | total     285.11 ms [283.81-288.08] | updates     18.19 | identity     269.89 (10001 req, max    0.741 ms) | peak     2.1 MB | diff    0.061 ms
+  imbl-nscache  cold   spread    every    100 | total      30.00 ms [29.98-30.17] | updates      7.97 | identity      22.19 (  101 req, max    0.623 ms) | peak     2.6 MB | diff    0.210 ms
+  imbl-nscache  cold   spread    every  10000 | total       2.29 ms [2.24-2.35] | updates      1.70 | identity       0.65 (    2 req, max    0.627 ms) | peak     2.1 MB | diff    0.595 ms
+  imbl-nscache  cold   spread    every    end | total       2.22 ms [2.22-2.23] | updates      1.60 | identity       0.62 (    1 req, max    0.622 ms) | peak     2.1 MB | diff    0.605 ms
+  imbl-nscache  cold   clustered every      1 | total     265.38 ms [263.86-266.03] | updates     16.35 | identity     249.03 (10001 req, max    0.633 ms) | peak     0.6 MB | diff    0.053 ms
+  imbl-nscache  cold   clustered every    100 | total       7.05 ms [6.95-7.12] | updates      2.34 | identity       4.71 (  101 req, max    0.598 ms) | peak     0.6 MB | diff    0.056 ms
+  imbl-nscache  cold   clustered every  10000 | total       1.87 ms [1.86-1.88] | updates      1.23 | identity       0.64 (    2 req, max    0.611 ms) | peak     0.6 MB | diff    0.420 ms
+  imbl-nscache  cold   clustered every    end | total       1.84 ms [1.84-1.85] | updates      1.23 | identity       0.61 (    1 req, max    0.606 ms) | peak     0.6 MB | diff    0.426 ms
+  imbl-nscache  cached spread    every      1 | total     283.82 ms [280.23-284.04] | updates     18.09 | identity     265.73 (10001 req, max    0.058 ms) | peak     2.1 MB | diff    0.050 ms
+  imbl-nscache  cached spread    every    100 | total      29.77 ms [29.43-29.90] | updates      7.95 | identity      21.82 (  101 req, max    0.303 ms) | peak     2.6 MB | diff    0.207 ms
+  imbl-nscache  cached spread    every  10000 | total       2.39 ms [2.38-2.53] | updates      1.75 | identity       0.64 (    2 req, max    0.616 ms) | peak     2.1 MB | diff    0.599 ms
+  imbl-nscache  cached spread    every    end | total       2.35 ms [2.35-2.37] | updates      1.76 | identity       0.62 (    1 req, max    0.615 ms) | peak     2.1 MB | diff    0.590 ms
+  imbl-nscache  cached clustered every      1 | total     260.30 ms [259.82-264.45] | updates     15.54 | identity     248.91 (10001 req, max    0.063 ms) | peak     0.6 MB | diff    0.049 ms
+  imbl-nscache  cached clustered every    100 | total       6.38 ms [6.33-6.54] | updates      2.29 | identity       4.03 (  101 req, max    0.055 ms) | peak     0.6 MB | diff    0.059 ms
+  imbl-nscache  cached clustered every  10000 | total       2.05 ms [2.03-2.07] | updates      1.53 | identity       0.53 (    2 req, max    0.507 ms) | peak     0.6 MB | diff    0.409 ms
+  imbl-nscache  cached clustered every    end | total       2.02 ms [2.00-2.03] | updates      1.51 | identity       0.52 (    1 req, max    0.516 ms) | peak     0.6 MB | diff    0.465 ms
+  imbl-nscache  initial identity (cold, reported separately): 0.59 ms
+  imbl-nscache  window of 8 checkpoints, spread, every 100: peak 3.8 MB, total 31.13 ms
+  imbl-nscache  history-independent identity: verified
+  imbl-full     cold   spread    every      1 | total    5726.20 ms [5708.37-5744.18] | updates     15.57 | identity    5710.62 (10001 req, max    0.750 ms) | peak     2.1 MB | diff    0.055 ms
+  imbl-full     cold   spread    every    100 | total      66.24 ms [66.08-66.37] | updates      6.87 | identity      59.37 (  101 req, max    0.704 ms) | peak     2.4 MB | diff    0.216 ms
+  imbl-full     cold   spread    every  10000 | total       2.77 ms [2.76-2.93] | updates      1.59 | identity       1.18 (    2 req, max    0.597 ms) | peak     2.1 MB | diff    0.584 ms
+  imbl-full     cold   spread    every    end | total       2.22 ms [2.19-2.23] | updates      1.62 | identity       0.60 (    1 req, max    0.599 ms) | peak     2.1 MB | diff    0.592 ms
+  imbl-full     cold   clustered every      1 | total    5492.32 ms [5484.02-5494.96] | updates     13.42 | identity    5470.60 (10001 req, max    0.794 ms) | peak     0.5 MB | diff    0.054 ms
+  imbl-full     cold   clustered every    100 | total      57.83 ms [57.71-57.95] | updates      1.89 | identity      55.94 (  101 req, max    0.650 ms) | peak     0.6 MB | diff    0.061 ms
+  imbl-full     cold   clustered every  10000 | total       2.35 ms [2.35-2.37] | updates      1.23 | identity       1.14 (    2 req, max    0.573 ms) | peak     0.5 MB | diff    0.413 ms
+  imbl-full     cold   clustered every    end | total       1.79 ms [1.78-1.80] | updates      1.21 | identity       0.58 (    1 req, max    0.577 ms) | peak     0.5 MB | diff    0.414 ms
+  imbl-full     cached spread    every      1 | total    5732.59 ms [5732.24-5742.82] | updates     15.29 | identity    5716.95 (10001 req, max    0.820 ms) | peak     2.1 MB | diff    0.057 ms
+  imbl-full     cached spread    every    100 | total      66.23 ms [65.80-66.54] | updates      6.84 | identity      59.39 (  101 req, max    0.686 ms) | peak     2.4 MB | diff    0.212 ms
+  imbl-full     cached spread    every  10000 | total       2.79 ms [2.79-2.89] | updates      1.60 | identity       1.19 (    2 req, max    0.597 ms) | peak     2.0 MB | diff    0.587 ms
+  imbl-full     cached spread    every    end | total       2.24 ms [2.21-2.26] | updates      1.60 | identity       0.61 (    1 req, max    0.608 ms) | peak     2.0 MB | diff    0.599 ms
+  imbl-full     cached clustered every      1 | total    5538.29 ms [5529.71-5646.44] | updates     12.71 | identity    5525.59 (10001 req, max    0.743 ms) | peak     0.6 MB | diff    0.052 ms
+  imbl-full     cached clustered every    100 | total      61.43 ms [59.35-61.44] | updates      2.09 | identity      59.36 (  101 req, max    0.872 ms) | peak     0.6 MB | diff    0.067 ms
+  imbl-full     cached clustered every  10000 | total       2.39 ms [2.38-2.57] | updates      1.24 | identity       1.15 (    2 req, max    0.574 ms) | peak     0.6 MB | diff    0.427 ms
+  imbl-full     cached clustered every    end | total       1.82 ms [1.82-1.85] | updates      1.22 | identity       0.60 (    1 req, max    0.600 ms) | peak     0.5 MB | diff    0.457 ms
+  imbl-full     initial identity (cold, reported separately): 0.57 ms
+  imbl-full     window of 8 checkpoints, spread, every 100: peak 3.5 MB, total 67.94 ms
+  imbl-full     history-independent identity: verified
+
+== Part B: transitive code updates, store of ~10000 bindings (model, not March execution) ==
+  chain 2000: 2000 definitions, 2000 affected (each recomputed once), layer 1 CID propagation 0.305 ms
+    changed bindings: 2000
+    champ         cached binding updates     0.664 ms | final identity      0.422 ms [0.417-0.429] | layer 2 total      1.086 ms
+    champ         cold   binding updates     0.581 ms | final identity      0.697 ms [0.688-0.711] | layer 2 total      1.278 ms
+    imbl-nscache  cached binding updates     0.778 ms | final identity      0.774 ms [0.772-0.783] | layer 2 total      1.552 ms
+    imbl-nscache  cold   binding updates     0.706 ms | final identity      0.777 ms [0.764-0.793] | layer 2 total      1.483 ms
+    imbl-full     cached binding updates     0.720 ms | final identity      0.744 ms [0.741-0.750] | layer 2 total      1.463 ms
+    imbl-full     cold   binding updates     0.699 ms | final identity      0.752 ms [0.725-0.763] | layer 2 total      1.451 ms
+  DAG 20000, local change: 20000 definitions, 1 affected (each recomputed once), layer 1 CID propagation 0.673 ms
+    changed bindings: 1
+    champ         cached binding updates     0.004 ms | final identity      0.002 ms [0.002-0.002] | layer 2 total      0.006 ms
+    champ         cold   binding updates     0.002 ms | final identity      1.391 ms [1.388-1.401] | layer 2 total      1.393 ms
+    imbl-nscache  cached binding updates     0.004 ms | final identity      0.035 ms [0.032-0.036] | layer 2 total      0.040 ms
+    imbl-nscache  cold   binding updates     0.004 ms | final identity      1.511 ms [1.477-1.516] | layer 2 total      1.515 ms
+    imbl-full     cached binding updates     0.004 ms | final identity      1.418 ms [1.411-1.424] | layer 2 total      1.422 ms
+    imbl-full     cold   binding updates     0.003 ms | final identity      1.431 ms [1.404-1.434] | layer 2 total      1.434 ms
+  DAG 20000, shared leaf: 20000 definitions, 19925 affected (each recomputed once), layer 1 CID propagation 6.050 ms
+    changed bindings: 19925
+    champ         cached binding updates     4.857 ms | final identity      1.383 ms [1.381-1.386] | layer 2 total      6.240 ms
+    champ         cold   binding updates     4.682 ms | final identity      1.413 ms [1.384-1.421] | layer 2 total      6.094 ms
+    imbl-nscache  cached binding updates     5.483 ms | final identity      1.565 ms [1.452-1.568] | layer 2 total      7.048 ms
+    imbl-nscache  cold   binding updates     5.121 ms | final identity      1.533 ms [1.383-1.555] | layer 2 total      6.654 ms
+    imbl-full     cached binding updates     5.008 ms | final identity      1.502 ms [1.454-1.508] | layer 2 total      6.510 ms
+    imbl-full     cold   binding updates     4.996 ms | final identity      1.509 ms [1.505-1.537] | layer 2 total      6.505 ms
+
+== Part C: development loop, 20000 definitions in 200 modules, store 60000 entries, 500 edit-run cycles (model) ==
+  champ         500 cycles | total      251.4 ms [247.7-252.6] | propagation     169.3 | run identity       82.2 | mean affected    51.7 | slowest cycle     8.60 ms | peak    2.6 MB
+  imbl-nscache  500 cycles | total      700.2 ms [682.9-704.3] | propagation     175.1 | run identity      525.1 | mean affected    51.7 | slowest cycle    12.74 ms | peak    4.4 MB
+  imbl-full     500 cycles | total     6332.0 ms [6153.2-6474.4] | propagation     198.1 | run identity     6133.8 | mean affected    51.7 | slowest cycle    19.18 ms | peak    4.5 MB
+  end states verified equal across candidates
