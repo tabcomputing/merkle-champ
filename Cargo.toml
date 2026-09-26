@@ -2,7 +2,7 @@
 name = "merkle-champ"
 version = "0.1.0"
 edition = "2024"
-description = "Persistent CHAMP hash map with canonical shape, lazily cached Merkle identities, and structural diff"
+description = "Persistent CHAMP hash map and set with canonical shape, cached Merkle identities, and structural diff"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
