@@ -1,6 +1,6 @@
 # merkle-champ
 
-A persistent hash map for content-addressed systems: a CHAMP trie
+A persistent hash map and set for content-addressed systems: a CHAMP trie
 (Steindorfer and Vinju, "Optimizing Hash-Array Mapped Tries for Fast and Lean
 Immutable JVM Collections", OOPSLA 2015) with three additions.
 
@@ -17,7 +17,11 @@ Immutable JVM Collections", OOPSLA 2015) with three additions.
 - **Structural diff.** `a.diff(&b)` walks both tries together, skipping shared
   subtrees by pointer, and by identity when both identities are already cached.
 
-Maps nest: in a `ChampMap<K, ChampMap<..>>` every inner map (for example one
+`ChampSet<K>` is a set built on the map (a map from elements to `()`), with
+the same canonical shape, identities and diff (reporting added and removed
+elements).
+
+Maps and sets nest: in a `ChampMap<K, ChampMap<..>>` every inner map (for example one
 per namespace level) has its own cached identity, which its parent's identity
 covers.
 
@@ -40,6 +44,11 @@ let v2 = v1.update("a".into(), 10).without(&"b".to_string());
 assert_eq!(v1.get(&"a".into()), Some(&1));       // v1 is unchanged
 assert_eq!(v1.diff(&v2).len(), 2);
 let id = v2.identity();                           // cached; later versions reuse subtrees
+
+use merkle_champ::ChampSet;
+let effects: ChampSet<String> = ["io".to_string(), "clock".into()].into_iter().collect();
+let fewer = effects.without(&"clock".to_string());
+assert_eq!(effects.diff(&fewer).len(), 1);
 ```
 
 Keys implement `KeyHash` (deterministic 64-bit hash) and `Ord` (orders entries
@@ -78,7 +87,9 @@ fixed golden vectors and an independent recomputation of small identities
 from FORMAT.md (`golden.rs`); and collision diffs in both directions,
 independently built maps with cold and warm identities, randomized historical
 snapshots with `get_mut`, no-op changes, and panics injected into user
-`Clone` and comparisons (`robustness.rs`).
+`Clone` and comparisons (`robustness.rs`); and the set against a model,
+history independence, equality with the unit map, diff, nesting, and golden
+vectors (`set.rs`).
 
 `store_bench` compares this map with `imbl`'s `HashMap` (using the same fixed
 hasher) and `OrdMap`, and with a clone-on-write `std` `HashMap`, on workloads

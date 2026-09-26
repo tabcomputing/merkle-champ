@@ -86,6 +86,7 @@ distinguished by type.
 | `i64` | `i` | 8 bytes, two's complement |
 | `[u8; 32]` (an identity) | `#` | 32 bytes |
 | nested `ChampMap` | `m` | the nested map's 32-byte identity |
+| nested `ChampSet` | `t` | the nested set's 32-byte identity |
 | `()` | `0` | nothing (no length) |
 
 User implementations must keep the same properties: injective (equal values
@@ -112,3 +113,12 @@ choose colliding ones, and colliding entries share a collision node searched
 linearly. With untrusted keys, use a key type whose `KeyHash` is keyed or
 cryptographic. That changes the placement and therefore the identities, so it
 is a different format and should use different domain strings.
+
+## 8. Sets
+
+A `ChampSet<K>` is stored and identified exactly as the map from its elements
+to `()`: same placement, shape and node encoding, with each value encoded as
+the single byte `0`. Its identity therefore equals that of a
+`ChampMap<K, ()>` with the same keys. When a set is nested as a value inside
+another map, it contributes tag `t` and its identity, so a nested set and a
+nested unit map remain distinguishable.
