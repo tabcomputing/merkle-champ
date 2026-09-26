@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 description = "Persistent CHAMP hash map and set with canonical shape, cached Merkle identities, and structural diff"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/tabcomputing/merkle-champ"
+keywords = ["champ", "hamt", "persistent", "merkle", "content-addressed"]
+categories = ["data-structures"]
+exclude = ["bench-results/"]
 
 [dependencies]
 sha2 = "0.10"

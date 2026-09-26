@@ -31,8 +31,8 @@ the crate documentation (equal keys hash equally, `Identify` is injective,
 nothing identity-relevant changes while stored). The placement hash is not
 cryptographic; see FORMAT.md before using untrusted keys.
 
-Status: prototype, written to measure whether a CHAMP is the right structure
-for the March language's global store. Not yet published.
+Status: early. Written to serve as the global store of the March language,
+where it was chosen by measurement over alternatives (see `bench-results/`).
 
 ## Use
 
