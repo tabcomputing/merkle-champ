@@ -2,20 +2,50 @@
 //! trie; Steindorfer and Vinju, OOPSLA 2015), with three properties aimed at
 //! content-addressed systems:
 //!
-//! 1. **Canonical shape.** A map's structure depends only on its contents,
-//!    never on the order of inserts and removals. Removal re-inlines single
-//!    entries upward, so deleting a key yields the same tree as never having
-//!    inserted it.
+//! 1. **Canonical shape.** A map's structure depends only on its contents and
+//!    the key placement hash, never on the order of inserts and removals.
+//!    Removal re-inlines single entries upward, so deleting a key yields the
+//!    same tree as never having inserted it.
 //! 2. **Lazily cached identities.** Every node can produce a SHA-256 identity
 //!    of its contents. It is computed on first request and cached in the
 //!    node; because nodes are shared between versions, a later version only
-//!    rehashes the path that changed. Ordinary reads and writes never hash.
+//!    rehashes the nodes on the paths that changed. Reads and writes compute
+//!    key placement hashes but never content identities.
 //! 3. **Structural diff.** Two versions are compared by walking both trees
 //!    together, skipping shared subtrees by pointer, and by identity when both
-//!    identities are already known.
+//!    identities are already cached.
 //!
-//! Key hashing is deterministic and portable ([`KeyHash`]), so the shape and
-//! therefore the identity of a map is the same on every machine and run.
+//! The identity format (placement hash, traversal, canonical rules, node
+//! domains, value encodings, versioning) is specified in `FORMAT.md` and
+//! pinned by golden vectors in `tests/golden.rs`.
+//!
+//! # Requirements on keys and values
+//!
+//! - `KeyHash` must agree with equality: equal keys have equal hashes.
+//! - `Ord` must be a total order consistent with `Eq`.
+//! - `Identify` must be injective and self-delimiting: equal values produce
+//!   the same encoding and unequal values different ones, or the map identity
+//!   is not a content identity.
+//! - Anything that affects equality, hashing or identity must not change while
+//!   stored (for example through interior mutability): node identities are
+//!   cached. The library never evaluates or forces values; callers supply
+//!   stable identities for whatever they store.
+//!
+//! # Untrusted keys
+//!
+//! The provided placement hashes are deterministic, unkeyed and not
+//! cryptographic. Keys chosen by an adversary can be made to collide, which
+//! degrades the colliding entries to a linear collision node. For untrusted
+//! keys, wrap them in a type whose `KeyHash` is keyed or cryptographic (this
+//! defines a different identity format).
+//!
+//! # Panics in user code
+//!
+//! `Clone`, comparisons, `KeyHash` and `Identify` are user code. If one of them
+//! panics during an update, the map is left unchanged and canonical: every
+//! update performs all user calls before it replaces any node, and only
+//! clears cached identities after the change beneath them has succeeded.
+//! (Copy-on-write copies made before the panic are equal in content.)
 //!
 //! Updates use copy-on-write paths: cloning a map is O(1), and an update
 //! copies only the nodes on the path it changes, in place when a node is not
@@ -239,12 +269,6 @@ fn build<K, V>(
     Arc::from(all)
 }
 
-/// A node that holds exactly one entry and nothing else. Canonical form never
-/// keeps such a node below the root: its entry moves into the parent.
-fn singleton<K, V>(node: &[Slot<K, V>]) -> bool {
-    node.len() == 2 && matches!(node[1], Slot::Entry(..))
-}
-
 /// Builds the canonical sub-trie holding two entries whose hashes agree on
 /// every fragment above `shift`.
 fn merge_two<K: Ord, V>(a: (K, V), ha: u64, b: (K, V), hb: u64, shift: u32) -> Node<K, V> {
@@ -450,23 +474,19 @@ where
         return v;
     }
     let at = 1 + entries + index(h.nodemap, bit);
-    let removed = {
-        let slots = Arc::make_mut(node);
-        let Slot::Child(c) = &mut slots[at] else {
-            unreachable!()
-        };
-        let removed = remove(c, key, hash, shift + BITS);
-        let hm = header_mut(slots);
-        hm.identity = OnceLock::new();
-        hm.size -= 1;
-        removed
+    let Slot::Child(child) = &node[at] else {
+        unreachable!()
     };
-    let collapse = matches!(&node[at], Slot::Child(c) if singleton(c));
-    if collapse {
-        let Slot::Child(c) = &node[at] else {
-            unreachable!()
-        };
-        let moved = c[1].clone();
+    if size(child) == 2 {
+        // The sub-trie will hold one entry, which canonical form keeps in
+        // this node. Build the replacement completely (all user Clone and
+        // comparison calls) before changing anything, so a panic in user
+        // code cannot leave a non-canonical singleton behind.
+        let mut pair = Vec::with_capacity(2);
+        all_entries(child, &mut pair);
+        let keep = if pair[0].0 == *key { 1 } else { 0 };
+        let removed = pair[1 - keep].1.clone();
+        let (k, v) = pair.swap_remove(keep);
         let datamap = h.datamap | bit;
         let nodemap = h.nodemap & !bit;
         let mut slots: Vec<Slot<K, V>> = Vec::with_capacity(node.len() - 1);
@@ -475,9 +495,21 @@ where
                 slots.push(s.clone());
             }
         }
-        slots.insert(index(datamap, bit), moved);
+        slots.insert(index(datamap, bit), Slot::Entry(k, v));
         *node = build(datamap, nodemap, h.size - 1, None, slots);
+        return removed;
     }
+    // The sub-trie keeps at least two entries, so it stays a child. Only
+    // nodes on the path are copied; their cached identities are cleared
+    // after the change below them has succeeded.
+    let slots = Arc::make_mut(node);
+    let Slot::Child(c) = &mut slots[at] else {
+        unreachable!()
+    };
+    let removed = remove(c, key, hash, shift + BITS);
+    let hm = header_mut(slots);
+    hm.identity = OnceLock::new();
+    hm.size -= 1;
     removed
 }
 
@@ -652,7 +684,7 @@ where
     V: Clone + Identify,
 {
     /// Lets maps nest (for example one map per namespace level): a nested
-    /// map contributes its identity, so a subtree has an identity for free.
+    /// map contributes its own (cached) identity to its parent's.
     fn identify(&self, hasher: &mut Sha256) {
         feed(hasher, b'm', &self.identity());
     }

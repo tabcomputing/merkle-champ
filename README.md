@@ -4,19 +4,28 @@ A persistent hash map for content-addressed systems: a CHAMP trie
 (Steindorfer and Vinju, "Optimizing Hash-Array Mapped Tries for Fast and Lean
 Immutable JVM Collections", OOPSLA 2015) with three additions.
 
-- **Canonical shape.** A map's structure depends only on its contents. Removal
-  re-inlines single entries upward, so deleting a key produces exactly the tree
-  that never having inserted it would. Key hashing is deterministic and
-  portable, so the shape is the same on every machine and run.
+- **Canonical shape.** A map's structure depends only on its contents (and the
+  key placement hash). Removal re-inlines single entries upward, so deleting a
+  key produces exactly the tree that never having inserted it would. Key
+  placement hashing is deterministic and portable, so the shape is the same on
+  every machine and run.
 - **Lazily cached Merkle identities.** `map.identity()` is a SHA-256 identity
   of the contents. Each node computes its identity on first request and caches
   it. Versions share unchanged nodes, so after a write only the changed path is
-  rehashed. Reads and writes never hash.
+  rehashed. Reads and writes compute key placement hashes but never content
+  identities.
 - **Structural diff.** `a.diff(&b)` walks both tries together, skipping shared
   subtrees by pointer, and by identity when both identities are already cached.
 
-Maps nest: a `ChampMap<K, ChampMap<..>>` gives every inner map (for example
-one per namespace level) its own identity.
+Maps nest: in a `ChampMap<K, ChampMap<..>>` every inner map (for example one
+per namespace level) has its own cached identity, which its parent's identity
+covers.
+
+The identity format is specified in [FORMAT.md](FORMAT.md) and pinned by
+golden vectors. Keys and values must satisfy the consistency requirements in
+the crate documentation (equal keys hash equally, `Identify` is injective,
+nothing identity-relevant changes while stored). The placement hash is not
+cryptographic; see FORMAT.md before using untrusted keys.
 
 Status: prototype, written to measure whether a CHAMP is the right structure
 for the March language's global store. Not yet published.
@@ -46,22 +55,30 @@ and then child pointers, both in bit order. One trie level is one pointer hop.
 Updates copy only the nodes on the changed path, in place when a node is not
 shared with another version.
 
-CHAMP indexes nodes with population counts. Build with the `popcnt`
-instruction enabled (`-C target-feature=+popcnt`, or any
-`-C target-cpu` from x86-64-v2 up); without it Rust emits a software popcount
-and lookups are measurably slower.
+CHAMP indexes nodes with population counts. On x86-64, enabling the `popcnt`
+instruction (`-C target-feature=+popcnt`, or a `-C target-cpu` of x86-64-v2 or
+later) measurably speeds up lookups; without it Rust emits a software
+popcount. This is an optimization only: results and identities are identical
+either way, and the crate sets no target flags. The benchmarks in
+`bench-results/` were built with it enabled.
 
 ## Tests and benchmarks
 
 ```sh
 cargo test --release
-RUSTFLAGS="-C target-feature=+popcnt" cargo run --release --example store_bench
+cargo run --release --example store_bench
+RUSTFLAGS="-C target-feature=+popcnt" cargo run --release --example store_bench   # as measured
 ```
 
 The tests check behaviour against a `BTreeMap` model under random operations,
 history-independence of shape and identity, return to the empty identity after
 deleting everything, forced full-hash collisions and deep shared prefixes,
-persistence, diff against a model, and nested identities.
+persistence, diff against a model, and nested identities (`properties.rs`);
+fixed golden vectors and an independent recomputation of small identities
+from FORMAT.md (`golden.rs`); and collision diffs in both directions,
+independently built maps with cold and warm identities, randomized historical
+snapshots with `get_mut`, no-op changes, and panics injected into user
+`Clone` and comparisons (`robustness.rs`).
 
 `store_bench` compares this map with `imbl`'s `HashMap` (using the same fixed
 hasher) and `OrdMap`, and with a clone-on-write `std` `HashMap`, on workloads

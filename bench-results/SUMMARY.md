@@ -149,3 +149,30 @@ graph, and an assumed identity request per run. The reverse index is keyed by
 name and read-only (edits change bodies, not call structure). Old code is
 deleted on replacement to stand in for collection. No image I/O. imbl-full's
 largest cases are extrapolated. Single machine, one CPU.
+
+## Addendum 3: whole-sequence elapsed time (2026-09-26 hardening pass)
+
+Codex noted that the earlier "total" figures were sums of timed updates and
+identity requests, not end-to-end time. The harness now also reports elapsed
+time for the whole sequence, including cloning, replacing and dropping
+checkpoints. Earlier outputs are kept unchanged and remain labeled as
+sums. Representative cases were rerun (cached starts; spread and clustered
+edits; identity after every edit, every 100 edits, and at the end; the
+development loop), in `2026-09-26-elapsed/`. One process run per size,
+3 repetitions, medians. Absolute times in this run are 5-20% higher than the
+earlier runs for the same code paths (run-to-run host variation plus the added
+timer).
+
+| Case | champ elapsed | imbl-nscache elapsed | imbl-full elapsed |
+|---|---:|---:|---:|
+| 10k, spread, identity every 100 | 18.0 ms | 36.2 ms | 74.4 ms |
+| 10k, spread, end only | 4.8 ms | 3.0 ms | 2.8 ms |
+| 1M, spread, identity every 100 | 17.7 ms | 680 ms | 2,141 ms |
+| 1M, spread, end only | 10.6 ms | 108 ms | 107 ms |
+| Dev loop, 500 cycles, 60k store | 315 ms | 962 ms | 7,127 ms |
+| Dev loop, 500 cycles, 1M store | 304 ms | 865 ms | ~58,900 ms (extrapolated) |
+
+Elapsed time exceeds the summed subtimings by about 1-20% (checkpoint
+handling, loop overhead); the ranking and ratios are unchanged. For imbl-full
+cases extrapolated from 25 edits, elapsed and summed figures are each scaled
+and can cross slightly.

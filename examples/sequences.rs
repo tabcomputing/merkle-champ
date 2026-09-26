@@ -378,6 +378,9 @@ fn trace(model: &Model<u64>, edits: usize, clustered: bool, seed: u64) -> (Vec<E
 }
 
 struct Outcome {
+    /// Whole-sequence elapsed time, including checkpoint handling.
+    wall_ms: f64,
+    /// Sum of timed updates and identity requests only.
     total_ms: f64,
     update_ms: f64,
     identity_ms: f64,
@@ -401,6 +404,7 @@ fn run_trace<S: Store<u64>>(
     let mut retained: std::collections::VecDeque<S> = std::collections::VecDeque::new();
     retained.push_back(s.clone());
     let base = reset_peak();
+    let wall = Instant::now();
     let (mut update, mut ident, mut max_cp, mut cps) = (0.0f64, 0.0f64, 0.0f64, 0usize);
     let run_edits = limit.map_or(edits.len(), |l| l.min(edits.len()));
     for (i, e) in edits[..run_edits].iter().enumerate() {
@@ -429,6 +433,8 @@ fn run_trace<S: Store<u64>>(
     ident += dt;
     max_cp = max_cp.max(dt);
     cps += 1;
+    // Whole sequence, including checkpoint cloning, replacement and dropping.
+    let wall_ms = wall.elapsed().as_secs_f64() * 1e3;
     let peak = peak_since(base);
     // Optional same-lineage diff between the last two checkpoints.
     let t = Instant::now();
@@ -439,6 +445,7 @@ fn run_trace<S: Store<u64>>(
     let extrapolated = run_edits < edits.len();
     (
         Outcome {
+            wall_ms: wall_ms * scale,
             total_ms: (update + ident) * 1e3 * scale,
             update_ms: update * 1e3 * scale,
             identity_ms: ident * 1e3 * scale,
@@ -470,7 +477,16 @@ fn part_a_candidate<S: Store<u64>>(
         // History independence of this scheme: the start built from a model
         // must have the same identity as the same contents built differently.
         for (dist, tr, expected) in traces {
-            for every in [1usize, 100, 10_000, 0] {
+            let quick = std::env::var("SEQ_QUICK").is_ok();
+            if quick && !cached {
+                continue;
+            }
+            let everies: &[usize] = if quick {
+                &[1, 100, 0]
+            } else {
+                &[1, 100, 10_000, 0]
+            };
+            for &every in everies {
                 if every > edits {
                     continue;
                 }
@@ -495,13 +511,13 @@ fn part_a_candidate<S: Store<u64>>(
                     if limit.is_none() {
                         assert_eq!(&end.contents(), expected, "{} contents", S::NAME);
                     }
-                    totals.push(o.total_ms);
+                    totals.push(o.wall_ms);
                     results.push(o);
                 }
                 let (lo, mid, hi) = median(totals);
                 let r = &results[1];
                 println!(
-                    "  {:<13} {:<6} {:<9} every {:>6} | total {:>10.2} ms [{:.2}-{:.2}] | updates {:>9.2} | identity {:>10.2} ({:>5} req, max {:>8.3} ms) | peak {:>7.1} MB | diff {:>8.3} ms{}",
+                    "  {:<13} {:<6} {:<9} every {:>6} | elapsed {:>10.2} ms [{:.2}-{:.2}] | updates+identity {:>10.2} | updates {:>9.2} | identity {:>10.2} ({:>5} req, max {:>8.3} ms) | peak {:>7.1} MB | diff {:>8.3} ms{}",
                     S::NAME,
                     if cached { "cached" } else { "cold" },
                     dist,
@@ -513,6 +529,7 @@ fn part_a_candidate<S: Store<u64>>(
                     mid,
                     lo,
                     hi,
+                    r.total_ms,
                     r.update_ms,
                     r.identity_ms,
                     r.checkpoints,
@@ -703,9 +720,9 @@ fn part_b(size: usize) {
         let lits: Vec<u64> = (0..n as u64).collect();
         // Original CIDs in dependency (index) order.
         let mut cids = Vec::with_capacity(n);
-        for i in 0..n {
+        for (i, lit) in lits.iter().enumerate() {
             let children: Vec<Identity> = graph.refs[i].iter().map(|&j| cids[j]).collect();
-            cids.push(def_cid(lits[i], &children));
+            cids.push(def_cid(*lit, &children));
         }
         // Layer 1: change one definition, propagate to reverse dependencies.
         let t = Instant::now();
@@ -926,10 +943,10 @@ fn dev_cycle<S: Store<Val>>(s: &mut S, edited: u32, bump: u64, run: bool) -> (us
     let mut affected = BTreeSet::new();
     let mut stack = vec![edited];
     while let Some(d) = stack.pop() {
-        if affected.insert(d) {
-            if let Some(Val::Names(cs)) = s.get("march.callers", &def_name(d)) {
-                stack.extend(cs.iter().copied());
-            }
+        if affected.insert(d)
+            && let Some(Val::Names(cs)) = s.get("march.callers", &def_name(d))
+        {
+            stack.extend(cs.iter().copied());
         }
     }
     // Rebuild in dependency order (ascending numbers): read binding, read
@@ -992,6 +1009,7 @@ fn part_c_candidate<S: Store<Val>>(
         s.identity(); // a session starts from a store whose identity is known
         let mut previous = s.clone(); // the previous checkpoint stays alive
         let base = reset_peak();
+        let wall = Instant::now();
         let n = limit.map_or(edits.len(), |l| l.min(edits.len()));
         let (mut aff, mut prop, mut idt) = (0usize, 0.0, 0.0);
         let mut max_cycle = 0.0f64;
@@ -1004,8 +1022,11 @@ fn part_c_candidate<S: Store<Val>>(
             previous = s.clone();
         }
         black_box(&previous);
+        drop(previous);
+        let wall_ms = wall.elapsed().as_secs_f64() * 1e3;
         let scale = edits.len() as f64 / n as f64;
         results.push((
+            wall_ms * scale,
             (prop + idt) * 1e3 * scale,
             prop * 1e3 * scale,
             idt * 1e3 * scale,
@@ -1019,7 +1040,7 @@ fn part_c_candidate<S: Store<Val>>(
     results.sort_by(|a, b| a.0.total_cmp(&b.0));
     let r = results[1];
     println!(
-        "  {:<13} {} cycles | total {:>10.1} ms [{:.1}-{:.1}] | propagation {:>9.1} | run identity {:>10.1} | mean affected {:>7.1} | slowest cycle {:>8.2} ms | peak {:>6.1} MB{}",
+        "  {:<13} {} cycles | elapsed {:>10.1} ms [{:.1}-{:.1}] | propagation+identity {:>10.1} | propagation {:>9.1} | run identity {:>10.1} | mean affected {:>7.1} | slowest cycle {:>8.2} ms | peak {:>6.1} MB{}",
         S::NAME,
         edits.len(),
         r.0,
@@ -1030,7 +1051,8 @@ fn part_c_candidate<S: Store<Val>>(
         r.3,
         r.4,
         r.5,
-        if r.6 { "  (extrapolated)" } else { "" }
+        r.6,
+        if r.7 { "  (extrapolated)" } else { "" }
     );
     let s = last.unwrap();
     if limit.is_none() {
