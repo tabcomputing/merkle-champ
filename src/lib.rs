@@ -19,6 +19,22 @@
 //! elements to `()`), with the same three properties. Both are re-exported at
 //! the crate root from the [`map`] and [`set`] modules.
 //!
+//! ```
+//! use merkle_champ::{ChampMap, ChampSet};
+//!
+//! let v1: ChampMap<String, u64> = [("a".to_string(), 1), ("b".into(), 2)].into_iter().collect();
+//! let v2 = v1.update("a".into(), 10);             // v1 is unchanged
+//! assert_eq!(v1.get(&"a".to_string()), Some(&1));
+//! assert_eq!(v1.diff(&v2).len(), 1);
+//!
+//! // History does not matter: equal contents, equal identity.
+//! let other: ChampMap<String, u64> = [("b".to_string(), 2), ("a".into(), 1)].into_iter().collect();
+//! assert_eq!(v1.identity(), other.identity());
+//!
+//! let set: ChampSet<u64> = [3, 1, 2].into_iter().collect();
+//! assert!(set.contains(&2));
+//! ```
+//!
 //! The identity format (placement hash, traversal, canonical rules, node
 //! domains, value encodings, versioning) is specified in `FORMAT.md` and
 //! pinned by golden vectors in `tests/golden.rs`.

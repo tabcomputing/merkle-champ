@@ -133,13 +133,13 @@ impl<K: KeyHash + Ord + Clone + Identify> Identify for ChampSet<K> {
     }
 }
 
-impl<K: KeyHash + Ord + Clone + Identify> PartialEq for ChampSet<K> {
+impl<K: PartialEq> PartialEq for ChampSet<K> {
     fn eq(&self, other: &Self) -> bool {
         self.map == other.map
     }
 }
 
-impl<K: KeyHash + Ord + Clone + Identify> Eq for ChampSet<K> {}
+impl<K: Eq> Eq for ChampSet<K> {}
 
 impl<K: fmt::Debug + KeyHash + Ord + Clone> fmt::Debug for ChampSet<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

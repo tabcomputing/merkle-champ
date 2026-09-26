@@ -517,16 +517,44 @@ where
     }
 }
 
-impl<K, V> PartialEq for ChampMap<K, V>
-where
-    K: KeyHash + Ord + Clone + Identify,
-    V: Clone + Identify + PartialEq,
-{
-    /// Content equality (canonical shape makes this a structural walk).
+/// Structural equality of two canonical tries: equal contents imply equal
+/// shape, so nodes compare slot by slot. Shared nodes are skipped by pointer,
+/// and by identity when both identities are already cached.
+fn nodes_equal<K: PartialEq, V: PartialEq>(a: &Node<K, V>, b: &Node<K, V>) -> bool {
+    if Arc::ptr_eq(a, b) {
+        return true;
+    }
+    if let (Some(x), Some(y)) = (cached_identity(a), cached_identity(b)) {
+        return x == y;
+    }
+    let (ha, hb) = (header(a), header(b));
+    if ha.datamap != hb.datamap
+        || ha.nodemap != hb.nodemap
+        || ha.size != hb.size
+        || ha.collision != hb.collision
+        || a.len() != b.len()
+    {
+        return false;
+    }
+    a[1..].iter().zip(&b[1..]).all(|pair| match pair {
+        (Slot::Entry(k1, v1), Slot::Entry(k2, v2)) => k1 == k2 && v1 == v2,
+        (Slot::Child(c1), Slot::Child(c2)) => nodes_equal(c1, c2),
+        _ => false,
+    })
+}
+
+impl<K: PartialEq, V: PartialEq> PartialEq for ChampMap<K, V> {
+    /// Content equality. Needs only `PartialEq` on keys and values; relies on
+    /// the canonical shape, so `KeyHash` must agree with key equality. Shared
+    /// nodes, and nodes whose cached identities are equal, compare equal
+    /// without inspecting values, so a map equals itself even when a value's
+    /// `PartialEq` is not reflexive (such as a float NaN).
     fn eq(&self, other: &Self) -> bool {
-        self.len() == other.len() && self.diff(other).is_empty()
+        nodes_equal(&self.root, &other.root)
     }
 }
+
+impl<K: Eq, V: Eq> Eq for ChampMap<K, V> {}
 
 impl<K: fmt::Debug + KeyHash + Ord + Clone, V: fmt::Debug + Clone> fmt::Debug for ChampMap<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -90,7 +90,14 @@ independently built maps with cold and warm identities, randomized historical
 snapshots with `get_mut`, no-op changes, and panics injected into user
 `Clone` and comparisons (`robustness.rs`); and the set against a model,
 history independence, equality with the unit map, diff, nesting, and golden
-vectors (`set.rs`).
+vectors (`set.rs`); and edge cases: hashes differing only in the top bits
+(deepest chains), extreme and integer hashes, a 200-entry collision node,
+every diff shape between an entry and a sub-trie in both directions, `Send` and
+`Sync` with concurrent identity requests, a panic while computing an identity,
+type and nesting separation in encodings, identity uniqueness across 4,096
+small maps, iteration, equality without `Identify`, and very large keys
+(`edge_cases.rs`). A long randomized soak over nested maps runs with
+`cargo test --release -- --ignored soak`.
 
 `store_bench` compares this map with `imbl`'s `HashMap` (using the same fixed
 hasher) and `OrdMap`, and with a clone-on-write `std` `HashMap`, on workloads
