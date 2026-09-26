@@ -8,6 +8,7 @@ fn main() {
     assert_eq!(v1.get(&"a".into()), Some(&1)); // v1 is unchanged
     assert_eq!(v1.diff(&v2).len(), 2);
     let id = v2.identity(); // cached; later versions reuse subtrees
+    assert_eq!(id, v2.identity());
 
     let effects: ChampSet<String> = ["io".to_string(), "clock".into()].into_iter().collect();
     let fewer = effects.without(&"clock".to_string());
