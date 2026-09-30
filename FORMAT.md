@@ -1,9 +1,10 @@
 # merkle-champ identity format, version 1
 
 This document specifies how a map's identity is computed, so that another
-implementation can reproduce it byte for byte. `tests/golden.rs` pins the
-values below. Any change to any part of this document is a new format version
-and must change the domain strings.
+implementation can reproduce it byte for byte, and how a map is stored
+(section 9). `tests/golden.rs` pins the values below. Any change that alters an
+identity computed under this document is a new format version and must change
+the domain strings.
 
 ## 1. Placement hash
 
@@ -122,3 +123,44 @@ the single byte `0`. Its identity therefore equals that of a
 `ChampMap<K, ()>` with the same keys. When a set is nested as a value inside
 another map, it contributes tag `t` and its identity, so a nested set and a
 nested unit map remain distinguishable.
+
+## 9. Stored form
+
+A node is stored as exactly the bytes its identity hashes (section 4): the
+domain string, the header fields, the entry encodings and the children's
+identities. So an object's identity is the SHA-256 of its stored bytes, and
+anyone holding the bytes can verify them against the identity that named them.
+The empty map is the 30-byte object `"merkle-champ/branch/v1" || 0u32 || 0u32`.
+
+- **Children are references.** A branch stores its children's 32-byte
+  identities, never their bytes, so every node is a separate object.
+- **Nested maps and sets are references too.** A value encoded as `m` or `t`
+  (section 5) holds the nested root's identity. The nested tree is stored as
+  its own objects.
+- **The bytes determine the node.** The domain string tells a branch from a
+  collision node. A branch's bitmaps give its entry and child counts, and a
+  collision node gives its entry count. Entries decode in order because the
+  encodings are self-delimiting, and a collision node's full hash is the
+  placement hash of any of its keys. The subtree size is not stored; a reader
+  recomputes it.
+- **Decoders need more than injectivity.** To load a map, every key and value
+  encoding must be readable back: a decoder consumes exactly one encoding and
+  rejects anything the encoder could not have written.
+
+A reader loads a node knowing where it sits: its depth and the hash prefix
+above it. It rejects, at minimum:
+
+- bytes that do not start with a known domain string, that end early, or that
+  continue past the node;
+- a branch whose bitmaps overlap, or that uses a position beyond the hash bits
+  remaining at its depth (only positions 0-15 at the last level, shift 60);
+- an entry whose key hash does not select its position, or does not agree
+  with the prefix above it;
+- a node other than the root with exactly one entry and no children, or none
+  at all;
+- a branch past the last level, or a collision node above it;
+- a collision node with fewer than two entries, keys not in strictly
+  increasing `Ord` order, or a key whose hash is not the node's full hash.
+
+These checks make every loaded map canonical, so a loaded map behaves like
+one built in memory, whatever bytes were supplied.

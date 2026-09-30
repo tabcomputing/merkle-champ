@@ -1,8 +1,7 @@
 //! Edge cases reviewed before release: extreme hashes, deep chains, large
 //! collision nodes, every diff shape, concurrency, panics during identity,
 //! encoding separation, and identity uniqueness.
-use merkle_champ::{ChampMap, ChampSet, Change, Identify, KeyHash};
-use sha2::{Digest, Sha256};
+use merkle_champ::{ChampMap, ChampSet, Change, Identify, KeyHash, Sink};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -16,10 +15,10 @@ impl KeyHash for H {
     }
 }
 impl Identify for H {
-    fn identify(&self, h: &mut Sha256) {
-        h.update([b'H']);
-        h.update(self.0.to_le_bytes());
-        h.update(self.1.to_le_bytes());
+    fn identify<S: Sink + ?Sized>(&self, h: &mut S) {
+        h.update(b"H");
+        h.update(&self.0.to_le_bytes());
+        h.update(&self.1.to_le_bytes());
     }
 }
 
@@ -209,7 +208,7 @@ thread_local! {
 #[derive(Clone, Debug, PartialEq)]
 struct Flaky(u64);
 impl Identify for Flaky {
-    fn identify(&self, h: &mut Sha256) {
+    fn identify<S: Sink + ?Sized>(&self, h: &mut S) {
         if PANIC_IN_IDENTIFY.with(Cell::get) {
             panic!("identify");
         }

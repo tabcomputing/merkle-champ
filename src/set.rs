@@ -1,8 +1,8 @@
 //! A persistent CHAMP set: a [`ChampMap`] from keys to `()`, with the same
 //! canonical shape, cached identities and structural diff.
 
-use crate::{ChampMap, Change, Identify, Identity, KeyHash, feed};
-use sha2::Sha256;
+use crate::codec::{Decode, DecodeError, Loader, Objects, Sink, read_identity};
+use crate::{ChampMap, Change, Identify, Identity, KeyHash, write_tagged};
 use std::fmt;
 
 /// A persistent set with canonical shape and a cached content identity.
@@ -128,8 +128,43 @@ impl<K: KeyHash + Ord + Clone + Identify> ChampSet<K> {
 
 impl<K: KeyHash + Ord + Clone + Identify> Identify for ChampSet<K> {
     /// A nested set contributes tag `t` and its identity (FORMAT.md, section 5).
-    fn identify(&self, hasher: &mut Sha256) {
-        feed(hasher, b't', &self.identity());
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+        write_tagged(sink, b't', &self.identity());
+    }
+
+    /// A nested set is stored as its own tree; the parent holds its identity.
+    fn save_objects(&self, objects: &mut Objects) {
+        self.save(objects);
+    }
+}
+
+impl<K: KeyHash + Ord + Clone + Identify> ChampSet<K> {
+    /// Adds the set's nodes to `objects` and returns its identity, as
+    /// [`ChampMap::save`] does for the map from its elements to `()`.
+    pub fn save(&self, objects: &mut Objects) -> Identity {
+        self.map.save(objects)
+    }
+}
+
+impl<K: KeyHash + Ord + Clone + Decode + 'static> ChampSet<K> {
+    /// Reads back the set whose identity is `root`, as [`ChampMap::load`] does.
+    pub fn load(root: &Identity, objects: &Objects) -> Result<Self, DecodeError> {
+        Self::load_with(root, &mut Loader::new(objects))
+    }
+
+    /// Like [`load`](Self::load), within an existing [`Loader`].
+    pub fn load_with(root: &Identity, loader: &mut Loader<'_>) -> Result<Self, DecodeError> {
+        Ok(ChampSet {
+            map: ChampMap::load_with(root, loader)?,
+        })
+    }
+}
+
+impl<K: KeyHash + Ord + Clone + Decode + 'static> Decode for ChampSet<K> {
+    /// Reads a nested set reference (tag `t`) and loads the set it names.
+    fn decode(input: &mut &[u8], loader: &mut Loader<'_>) -> Result<Self, DecodeError> {
+        let id = read_identity(input, b't')?;
+        loader.nested(id, |l| Self::load_with(&id, l))
     }
 }
 

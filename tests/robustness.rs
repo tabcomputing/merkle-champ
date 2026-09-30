@@ -1,7 +1,6 @@
 //! Robustness: collision diffs, independent construction with cold and warm
 //! identities, historical snapshots, no-op changes, and panics in user code.
-use merkle_champ::{ChampMap, Change, Identify, KeyHash};
-use sha2::{Digest, Sha256};
+use merkle_champ::{ChampMap, Change, Identify, KeyHash, Sink};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -71,10 +70,10 @@ impl KeyHash for K {
     }
 }
 impl Identify for K {
-    fn identify(&self, h: &mut Sha256) {
-        h.update([b'K']);
-        h.update(self.0.to_le_bytes());
-        h.update(self.1.to_le_bytes());
+    fn identify<S: Sink + ?Sized>(&self, h: &mut S) {
+        h.update(b"K");
+        h.update(&self.0.to_le_bytes());
+        h.update(&self.1.to_le_bytes());
     }
 }
 

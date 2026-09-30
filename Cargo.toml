@@ -1,6 +1,6 @@
 [package]
 name = "merkle-champ"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Persistent CHAMP hash map and set with canonical shape, cached Merkle identities, and structural diff"
 license = "MIT OR Apache-2.0"

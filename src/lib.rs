@@ -46,6 +46,9 @@
 //! - `Identify` must be injective and self-delimiting: equal values produce
 //!   the same encoding and unequal values different ones, or the map identity
 //!   is not a content identity.
+//! - To store and load a map (see [`codec`]), keys and values also implement
+//!   [`Decode`], which must read back exactly what `Identify` writes and
+//!   reject anything it could not have written.
 //! - Anything that affects equality, hashing or identity must not change while
 //!   stored (for example through interior mutability): node identities are
 //!   cached. The library never evaluates or forces values; callers supply
@@ -70,12 +73,30 @@
 //! Updates use copy-on-write paths: cloning a map is O(1), and an update
 //! copies only the nodes on the path it changes, in place when a node is not
 //! shared with another version.
+//!
+//! # Storing maps
+//!
+//! A stored node is exactly the bytes its identity hashes (FORMAT.md, section
+//! 9), so loading verifies itself. [`ChampMap::save`] adds a map's nodes to an
+//! [`Objects`] set and [`ChampMap::load`] reads them back. The crate performs
+//! no I/O: moving objects to disk or across a network is up to the caller.
+//!
+//! ```
+//! use merkle_champ::{ChampMap, Objects};
+//!
+//! let map: ChampMap<String, u64> = [("a".to_string(), 1), ("b".into(), 2)].into_iter().collect();
+//! let mut objects = Objects::new();
+//! let root = map.save(&mut objects);
+//! assert_eq!(root, map.identity());
+//! let loaded: ChampMap<String, u64> = ChampMap::load(&root, &objects).unwrap();
+//! assert_eq!(loaded, map);
+//! ```
 
-use sha2::{Digest, Sha256};
-
+pub mod codec;
 pub mod map;
 pub mod set;
 
+pub use codec::{Decode, DecodeError, Loader, Objects, Sink, read_tagged, write_tagged};
 pub use map::{ChampMap, Change, Iter};
 pub use set::{ChampSet, SetChange};
 
@@ -148,57 +169,57 @@ impl KeyHash for i64 {
     }
 }
 
-/// Feeds a value's canonical content into an identity hash.
+/// Writes a value's canonical encoding: into a hasher to compute an identity,
+/// or into a buffer to store it.
 ///
 /// Implementations must be injective over the values that can occur, which in
-/// practice means a type tag plus length-prefixed bytes.
+/// practice means a type tag plus length-prefixed bytes ([`write_tagged`]).
 pub trait Identify {
-    fn identify(&self, hasher: &mut Sha256);
-}
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S);
 
-pub(crate) fn feed(hasher: &mut Sha256, tag: u8, bytes: &[u8]) {
-    hasher.update([tag]);
-    hasher.update((bytes.len() as u64).to_le_bytes());
-    hasher.update(bytes);
+    /// Adds any separately stored objects this value refers to, such as a
+    /// nested map's nodes, to `objects`. Called by [`ChampMap::save`]. Most
+    /// values are stored inline and keep the default, which does nothing.
+    fn save_objects(&self, _objects: &mut Objects) {}
 }
 
 impl Identify for str {
-    fn identify(&self, hasher: &mut Sha256) {
-        feed(hasher, b's', self.as_bytes());
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+        write_tagged(sink, b's', self.as_bytes());
     }
 }
 impl Identify for String {
-    fn identify(&self, hasher: &mut Sha256) {
-        self.as_str().identify(hasher);
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+        self.as_str().identify(sink);
     }
 }
 impl Identify for [u8] {
-    fn identify(&self, hasher: &mut Sha256) {
-        feed(hasher, b'b', self);
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+        write_tagged(sink, b'b', self);
     }
 }
 impl Identify for Vec<u8> {
-    fn identify(&self, hasher: &mut Sha256) {
-        self.as_slice().identify(hasher);
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+        self.as_slice().identify(sink);
     }
 }
 impl Identify for u64 {
-    fn identify(&self, hasher: &mut Sha256) {
-        feed(hasher, b'u', &self.to_le_bytes());
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+        write_tagged(sink, b'u', &self.to_le_bytes());
     }
 }
 impl Identify for i64 {
-    fn identify(&self, hasher: &mut Sha256) {
-        feed(hasher, b'i', &self.to_le_bytes());
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+        write_tagged(sink, b'i', &self.to_le_bytes());
     }
 }
 impl Identify for Identity {
-    fn identify(&self, hasher: &mut Sha256) {
-        feed(hasher, b'#', self);
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+        write_tagged(sink, b'#', self);
     }
 }
 impl Identify for () {
-    fn identify(&self, hasher: &mut Sha256) {
-        hasher.update([b'0']);
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+        sink.update(b"0");
     }
 }

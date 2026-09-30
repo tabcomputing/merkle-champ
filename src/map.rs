@@ -1,7 +1,8 @@
 //! The persistent CHAMP map. See the crate documentation for its properties
 //! and requirements, and FORMAT.md for the identity format.
 
-use crate::{BITS, FANOUT_MASK, HASH_BITS, Identify, Identity, KeyHash, feed};
+use crate::codec::{Decode, DecodeError, Loader, Objects, Sink, read_bytes, read_identity};
+use crate::{BITS, FANOUT_MASK, HASH_BITS, Identify, Identity, KeyHash, write_tagged};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::sync::{Arc, OnceLock};
@@ -340,33 +341,199 @@ where
     removed
 }
 
-fn identity_of<K: Identify, V: Identify>(node: &[Slot<K, V>]) -> Identity {
+const BRANCH_DOMAIN: &[u8] = b"merkle-champ/branch/v1";
+const COLLISION_DOMAIN: &[u8] = b"merkle-champ/collision/v1";
+
+/// Writes a node's encoding (FORMAT.md, section 4): its identity preimage,
+/// which is also its stored form. `child` supplies each child's identity.
+fn write_node<K: Identify, V: Identify, S: Sink>(
+    node: &[Slot<K, V>],
+    sink: &mut S,
+    mut child: impl FnMut(&Node<K, V>) -> Identity,
+) {
     let h = header(node);
-    **h.identity.get_or_init(|| {
+    match h.collision {
+        Some(_) => {
+            sink.update(COLLISION_DOMAIN);
+            sink.update(&((node.len() - 1) as u64).to_le_bytes());
+        }
+        None => {
+            sink.update(BRANCH_DOMAIN);
+            sink.update(&h.datamap.to_le_bytes());
+            sink.update(&h.nodemap.to_le_bytes());
+        }
+    }
+    for slot in &node[1..] {
+        match slot {
+            Slot::Entry(k, v) => {
+                k.identify(sink);
+                v.identify(sink);
+            }
+            Slot::Child(c) => sink.update(&child(c)),
+            Slot::Header(_) => unreachable!(),
+        }
+    }
+}
+
+fn identity_of<K: Identify, V: Identify>(node: &[Slot<K, V>]) -> Identity {
+    **header(node).identity.get_or_init(|| {
         let mut s = Sha256::new();
-        match h.collision {
-            Some(_) => {
-                s.update(b"merkle-champ/collision/v1");
-                s.update(((node.len() - 1) as u64).to_le_bytes());
-            }
-            None => {
-                s.update(b"merkle-champ/branch/v1");
-                s.update(h.datamap.to_le_bytes());
-                s.update(h.nodemap.to_le_bytes());
-            }
-        }
-        for slot in &node[1..] {
-            match slot {
-                Slot::Entry(k, v) => {
-                    k.identify(&mut s);
-                    v.identify(&mut s);
-                }
-                Slot::Child(c) => s.update(identity_of(c)),
-                Slot::Header(_) => unreachable!(),
-            }
-        }
+        write_node(node, &mut s, |c| identity_of(c));
         Box::new(s.finalize().into())
     })
+}
+
+/// Adds `node`'s subtree to `objects`, children before parents, skipping any
+/// subtree whose root is already there. Values' separately stored objects
+/// (nested maps) are added too. Returns the node's identity.
+fn save_node<K: Identify, V: Identify>(node: &Node<K, V>, objects: &mut Objects) -> Identity {
+    if let Some(id) = cached_identity(node)
+        && objects.contains(&id)
+    {
+        return id;
+    }
+    let mut children = Vec::new();
+    for slot in &node[1..] {
+        match slot {
+            Slot::Entry(k, v) => {
+                k.save_objects(objects);
+                v.save_objects(objects);
+            }
+            Slot::Child(c) => children.push(save_node(c, objects)),
+            Slot::Header(_) => unreachable!(),
+        }
+    }
+    let mut bytes = Vec::new();
+    let mut ids = children.into_iter();
+    write_node(node, &mut bytes, |_| {
+        ids.next().expect("one identity per child")
+    });
+    // A cached identity was computed from exactly these bytes, so there is no
+    // need to hash them again.
+    match cached_identity(node) {
+        Some(id) => {
+            objects.insert_known(id, bytes);
+            id
+        }
+        None => {
+            let id = objects.insert(bytes);
+            let _ = header(node).identity.set(Box::new(id));
+            id
+        }
+    }
+}
+
+fn read_u32(input: &mut &[u8]) -> Result<u32, DecodeError> {
+    Ok(u32::from_le_bytes(
+        read_bytes(input, 4)?.try_into().expect("4 bytes"),
+    ))
+}
+
+/// Loads the node `id` found at trie depth `shift` below the hash prefix
+/// `prefix`, checking that it is canonical there. Returns the node and its
+/// subtree size.
+fn load_node<K, V>(
+    id: &Identity,
+    loader: &mut Loader<'_>,
+    shift: u32,
+    prefix: u64,
+    root: bool,
+) -> Result<(Node<K, V>, usize), DecodeError>
+where
+    K: KeyHash + Ord + Decode,
+    V: Decode,
+{
+    use DecodeError::{Malformed, Missing, NonCanonical};
+    let bytes = loader.objects().get(id).ok_or(Missing(*id))?;
+    let mut input = bytes;
+    let (node, size) = if let Some(rest) = input.strip_prefix(BRANCH_DOMAIN) {
+        input = rest;
+        if shift >= HASH_BITS {
+            return Err(NonCanonical("branch node below the last trie level"));
+        }
+        let datamap = read_u32(&mut input)?;
+        let nodemap = read_u32(&mut input)?;
+        if datamap & nodemap != 0 {
+            return Err(NonCanonical("position used by both an entry and a child"));
+        }
+        // The last level has fewer than five hash bits left (4 at shift 60,
+        // so 16 positions), and positions beyond them cannot be selected.
+        if HASH_BITS - shift < BITS && (datamap | nodemap) >> (1u32 << (HASH_BITS - shift)) != 0 {
+            return Err(NonCanonical("position beyond the remaining hash bits"));
+        }
+        let mask = if shift == 0 {
+            0
+        } else {
+            (1u64 << shift.min(63)) - 1
+        };
+        let entries = datamap.count_ones() as usize;
+        let children = nodemap.count_ones() as usize;
+        if !root && children == 0 && entries < 2 {
+            return Err(NonCanonical("singleton or empty node below the root"));
+        }
+        let mut slots = Vec::with_capacity(entries + children);
+        for f in (0..32u32).filter(|f| datamap & (1 << f) != 0) {
+            let k = K::decode(&mut input, loader)?;
+            let v = V::decode(&mut input, loader)?;
+            let kh = k.key_hash();
+            if fragment(kh, shift) != f || (kh & mask) != (prefix & mask) {
+                return Err(NonCanonical("entry stored at the wrong position"));
+            }
+            slots.push(Slot::Entry(k, v));
+        }
+        let mut size = entries;
+        for f in (0..32u32).filter(|f| nodemap & (1 << f) != 0) {
+            let child: Identity = read_bytes(&mut input, 32)?.try_into().expect("32 bytes");
+            let (c, n) = load_node(
+                &child,
+                loader,
+                shift + BITS,
+                prefix | (u64::from(f) << shift),
+                false,
+            )?;
+            size += n;
+            slots.push(Slot::Child(c));
+        }
+        (build(datamap, nodemap, size, None, slots), size)
+    } else if let Some(rest) = input.strip_prefix(COLLISION_DOMAIN) {
+        input = rest;
+        if shift < HASH_BITS {
+            return Err(NonCanonical("collision node above the last trie level"));
+        }
+        let count = u64::from_le_bytes(read_bytes(&mut input, 8)?.try_into().expect("8 bytes"));
+        if count < 2 {
+            return Err(NonCanonical("collision node with fewer than two entries"));
+        }
+        // Each entry takes at least one byte, which bounds the allocation.
+        if count > input.len() as u64 {
+            return Err(Malformed("entry count exceeds input"));
+        }
+        let mut slots: Vec<Slot<K, V>> = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let k = K::decode(&mut input, loader)?;
+            let v = V::decode(&mut input, loader)?;
+            if k.key_hash() != prefix {
+                return Err(NonCanonical("collision entry with a different hash"));
+            }
+            if let Some(Slot::Entry(last, _)) = slots.last()
+                && *last >= k
+            {
+                return Err(NonCanonical(
+                    "collision entries not in strictly increasing order",
+                ));
+            }
+            slots.push(Slot::Entry(k, v));
+        }
+        let size = count as usize;
+        (build(0, 0, size, Some(prefix), slots), size)
+    } else {
+        return Err(Malformed("unknown node domain"));
+    };
+    if !input.is_empty() {
+        return Err(Malformed("trailing bytes after a node"));
+    }
+    let _ = header(&node).identity.set(Box::new(*id));
+    Ok((node, size))
 }
 
 fn cached_identity<K, V>(node: &[Slot<K, V>]) -> Option<Identity> {
@@ -512,8 +679,66 @@ where
 {
     /// Lets maps nest (for example one map per namespace level): a nested
     /// map contributes its own (cached) identity to its parent's.
-    fn identify(&self, hasher: &mut Sha256) {
-        feed(hasher, b'm', &self.identity());
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+        write_tagged(sink, b'm', &self.identity());
+    }
+
+    /// A nested map is stored as its own tree; the parent holds its identity.
+    fn save_objects(&self, objects: &mut Objects) {
+        self.save(objects);
+    }
+}
+
+impl<K, V> ChampMap<K, V>
+where
+    K: KeyHash + Ord + Clone + Identify,
+    V: Clone + Identify,
+{
+    /// Adds every node of this map, and every nested map it holds, to
+    /// `objects`, and returns the map's identity. A stored node is exactly the
+    /// bytes its identity hashes (FORMAT.md, section 9).
+    ///
+    /// Subtrees whose roots are already in `objects` are skipped, so saving a
+    /// new version into the same set costs only the nodes on changed paths.
+    /// That relies on `objects` holding whole subtrees, which is what `save`
+    /// always produces.
+    pub fn save(&self, objects: &mut Objects) -> Identity {
+        save_node(&self.root, objects)
+    }
+}
+
+impl<K, V> ChampMap<K, V>
+where
+    K: KeyHash + Ord + Clone + Decode + 'static,
+    V: Clone + Decode + 'static,
+{
+    /// Reads back the map whose identity is `root` from `objects`.
+    ///
+    /// Every node is checked to be canonical where it is found, so the result
+    /// is a well-formed map whatever the bytes. The loaded map has its
+    /// identities already cached. Nested maps that occur more than once are
+    /// loaded once and shared.
+    pub fn load(root: &Identity, objects: &Objects) -> Result<Self, DecodeError> {
+        Self::load_with(root, &mut Loader::new(objects))
+    }
+
+    /// Like [`load`](Self::load), within an existing [`Loader`], so that
+    /// nested maps are shared across several loads.
+    pub fn load_with(root: &Identity, loader: &mut Loader<'_>) -> Result<Self, DecodeError> {
+        let (root, _) = load_node(root, loader, 0, 0, true)?;
+        Ok(ChampMap { root })
+    }
+}
+
+impl<K, V> Decode for ChampMap<K, V>
+where
+    K: KeyHash + Ord + Clone + Decode + 'static,
+    V: Clone + Decode + 'static,
+{
+    /// Reads a nested map reference (tag `m`) and loads the map it names.
+    fn decode(input: &mut &[u8], loader: &mut Loader<'_>) -> Result<Self, DecodeError> {
+        let id = read_identity(input, b'm')?;
+        loader.nested(id, |l| Self::load_with(&id, l))
     }
 }
 

@@ -1,6 +1,9 @@
 # Persistence: disk, network and history (design note)
 
-**Status: proposal, not implemented.** Written 2026-09-29 in a Pandora
+**Status: proposal.** Phase 1's node codec is implemented in merkle-champ
+0.2 (unreleased), without I/O as Addendum B recommends: `Sink`, `Decode`,
+`Objects`, `ChampMap::save` and `ChampMap::load`, specified in FORMAT.md
+section 9. The rest is not implemented. Written 2026-09-29 in a Pandora
 session with Thomas, for discussion with March and Axiom. Nothing here changes
 the identity format in [FORMAT.md](FORMAT.md). That is deliberate: the
 format-v1 preimage turns out to be a good storage format too.
@@ -521,7 +524,7 @@ path unchanged.
 - march7 already has deterministic images, in its own host format: CID-sorted
   code and data blobs, an entry CID and a data root. Generations 1, 2 and 3 of
   its self-rebuild are byte-identical without CHAMP
-  (march7-claude/docs/REBUILD.md). march7 does not depend on merkle-champ;
+  (march7/docs/REBUILD.md). march7 does not depend on merkle-champ;
   march6, now a reference line, pins it at `=0.1.0`.
 - So this design fits March's future **global store** (namespaced state and
   modules, behind March's seal/freeze boundary), not its system image.

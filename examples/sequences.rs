@@ -824,33 +824,33 @@ enum Val {
 }
 
 impl Identify for Val {
-    fn identify(&self, h: &mut Sha256) {
+    fn identify<S: merkle_champ::Sink + ?Sized>(&self, h: &mut S) {
         match self {
             Val::Cid(c) => {
-                h.update([0]);
+                h.update(&[0]);
                 h.update(c);
             }
             Val::Def(b) => {
-                h.update([1]);
-                h.update(b.lit.to_le_bytes());
-                h.update((b.callees.len() as u64).to_le_bytes());
+                h.update(&[1]);
+                h.update(&b.lit.to_le_bytes());
+                h.update(&(b.callees.len() as u64).to_le_bytes());
                 for c in b.callees.iter() {
                     h.update(c);
                 }
                 for n in b.callee_names.iter() {
-                    h.update(n.to_le_bytes());
+                    h.update(&n.to_le_bytes());
                 }
             }
             Val::Names(n) => {
-                h.update([2]);
-                h.update((n.len() as u64).to_le_bytes());
+                h.update(&[2]);
+                h.update(&(n.len() as u64).to_le_bytes());
                 for x in n.iter() {
-                    h.update(x.to_le_bytes());
+                    h.update(&x.to_le_bytes());
                 }
             }
             Val::Data(x) => {
-                h.update([3]);
-                h.update(x.to_le_bytes());
+                h.update(&[3]);
+                h.update(&x.to_le_bytes());
             }
         }
     }

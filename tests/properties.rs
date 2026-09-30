@@ -31,10 +31,9 @@ impl KeyHash for Forced {
     }
 }
 impl merkle_champ::Identify for Forced {
-    fn identify(&self, h: &mut sha2::Sha256) {
-        use sha2::Digest;
-        h.update(self.0.to_le_bytes());
-        h.update(self.1.to_le_bytes());
+    fn identify<S: merkle_champ::Sink + ?Sized>(&self, h: &mut S) {
+        h.update(&self.0.to_le_bytes());
+        h.update(&self.1.to_le_bytes());
     }
 }
 

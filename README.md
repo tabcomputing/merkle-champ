@@ -53,9 +53,37 @@ assert_eq!(effects.diff(&fewer).len(), 1);
 ```
 
 Keys implement `KeyHash` (deterministic 64-bit hash) and `Ord` (orders entries
-that share a full hash). Keys and values implement `Identify` for identities.
-Implementations are provided for strings, byte vectors, `u64`, `i64`, `()`,
-32-byte identities, and nested maps.
+that share a full hash). Keys and values implement `Identify` for identities,
+and `Decode` to be loaded back. Implementations are provided for strings, byte
+vectors, `u64`, `i64`, `()`, 32-byte identities, and nested maps and sets.
+
+## Storing and loading
+
+A stored node is exactly the bytes its identity hashes (FORMAT.md, section 9),
+so loading verifies itself, as with Git objects. `save` adds a map's nodes to an
+`Objects` set, keyed by the hash of their bytes. `load` reads a map back and
+checks that every node is canonical, whatever bytes were supplied.
+
+```rust
+use merkle_champ::{ChampMap, Objects};
+
+let v1: ChampMap<String, u64> = (0..1000).map(|i| (format!("k{i}"), i)).collect();
+let mut objects = Objects::new();
+let root = v1.save(&mut objects);                 // the map's identity
+let v2 = v1.update("k7".into(), 0);
+v2.save(&mut objects);                            // adds only the changed path
+let loaded: ChampMap<String, u64> = ChampMap::load(&root, &objects).unwrap();
+assert_eq!(loaded, v1);
+```
+
+Nested maps and sets are stored as their own trees and shared on load. The
+crate performs no I/O: moving objects to disk or across a network is up to the
+caller. PERSISTENCE.md discusses a layer built on top for stores, packs, sync
+and history.
+
+At 1,000,000 `u64` entries (local release build, not a benchmark): saving takes
+about 0.3 s and 53 MB in 308,603 objects, loading about 0.15-0.18 s, and saving
+a new version after one write adds 5 objects in about 50 µs.
 
 ## Layout
 
@@ -96,7 +124,12 @@ every diff shape between an entry and a sub-trie in both directions, `Send` and
 `Sync` with concurrent identity requests, a panic while computing an identity,
 type and nesting separation in encodings, identity uniqueness across 4,096
 small maps, iteration, equality without `Identify`, and very large keys
-(`edge_cases.rs`). A long randomized soak over nested maps runs with
+(`edge_cases.rs`); and storage: round trips of every provided type, stored
+bytes equal to identity preimages, identical object sets for equal maps,
+incremental saves, nested maps and sets shared on load (including 2^60 paths
+through 61 maps), the nesting limit, missing objects, loading as the wrong
+type, and rejection of malformed and non-canonical nodes at every rule in
+FORMAT.md section 9 (`codec.rs`). A long randomized soak over nested maps runs with
 `cargo test --release -- --ignored soak`.
 
 `store_bench` compares this map with `imbl`'s `HashMap` (using the same fixed
