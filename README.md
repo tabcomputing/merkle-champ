@@ -1,5 +1,10 @@
 # merkle-champ
 
+The workspace also contains `merkle-champ-pack`, a separate crate for immutable
+indexed packs of node preimages. It currently supports the MCHPACK1 format used
+by transfs. Applications that only need the in-memory map can depend on
+`merkle-champ` without pulling in pack APIs.
+
 A persistent hash map and set for content-addressed systems: a CHAMP trie
 (Steindorfer and Vinju, "Optimizing Hash-Array Mapped Tries for Fast and Lean
 Immutable JVM Collections", OOPSLA 2015) with three additions.

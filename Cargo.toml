@@ -9,6 +9,10 @@ keywords = ["champ", "hamt", "persistent", "merkle", "content-addressed"]
 categories = ["data-structures"]
 exclude = ["bench-results/"]
 
+[workspace]
+members = ["crates/merkle-champ-pack"]
+resolver = "2"
+
 [dependencies]
 sha2 = "0.10"
 
