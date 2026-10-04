@@ -19,6 +19,12 @@
 //! elements to `()`), with the same three properties. Both are re-exported at
 //! the crate root from the [`map`] and [`set`] modules.
 //!
+//! [`Vector`] is the companion sequence: a persistent vector trie whose shape
+//! depends only on its length, with the same cached identities (the
+//! [`vector`] module). Values have one encoding ([`Identify`]) in maps, sets
+//! and vectors, and each can nest in the others. The [`pack`] module reads and
+//! writes indexed packs of stored nodes.
+//!
 //! ```
 //! use merkle_champ::{ChampMap, ChampSet};
 //!
@@ -94,11 +100,14 @@
 
 pub mod codec;
 pub mod map;
+pub mod pack;
 pub mod set;
+pub mod vector;
 
 pub use codec::{Decode, DecodeError, Loader, Objects, Sink, read_tagged, write_tagged};
 pub use map::{ChampMap, Change, Iter};
 pub use set::{ChampSet, SetChange};
+pub use vector::Vector;
 
 /// A 32-byte SHA-256 content identity.
 pub type Identity = [u8; 32];

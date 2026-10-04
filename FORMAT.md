@@ -88,6 +88,7 @@ distinguished by type.
 | `[u8; 32]` (an identity) | `#` | 32 bytes |
 | nested `ChampMap` | `m` | the nested map's 32-byte identity |
 | nested `ChampSet` | `t` | the nested set's 32-byte identity |
+| nested `Vector` | `v` | the nested vector's 32-byte identity (section 10) |
 | `()` | `0` | nothing (no length) |
 
 User implementations must keep the same properties: injective (equal values
@@ -164,3 +165,55 @@ above it. It rejects, at minimum:
 
 These checks make every loaded map canonical, so a loaded map behaves like
 one built in memory, whatever bytes were supplied.
+
+## 10. Vectors
+
+`Vector` has its own identity format, version 1, in its own domains, so a
+vector's identity can never equal a map's. `tests/vector.rs` checks the
+implementation against an independent computation of this section.
+
+### 10.1 Canonical shape
+
+A vector of `len` elements is split by its length alone:
+
+- **The tail** holds the last elements: indexes `tailoff` to `len - 1`, where
+  `tailoff = ((len - 1) / 32) * 32` for `len > 0`, and `tailoff = 0` for the
+  empty vector. A non-empty vector's tail holds 1 to 32 elements.
+- **The tree** holds the first `tailoff` elements, a multiple of 32, and is
+  absent when `tailoff` is 0. Its leaves hold exactly 32 elements each, in
+  order. Above them are `h ≥ 1` levels of branches; a branch holds 1 to 32
+  children, in order, and every branch except those on the rightmost path is
+  full. `h` is the smallest value with `32^(h + 1) ≥ tailoff`.
+
+The shape therefore depends only on `len`, never on how the vector was built.
+
+### 10.2 Node identity
+
+Elements are encoded with `Identify` (section 5). All integers are
+little-endian.
+
+```
+leaf   = SHA-256( "merkle-champ/vector/leaf/v1"   || count (u8) || Identify(e) for each element in order )
+branch = SHA-256( "merkle-champ/vector/branch/v1" || count (u8) || identity(child) for each child in order )
+```
+
+`count` is the number of elements (leaf) or children (branch), 1 to 32 (0 for
+the empty vector's tail).
+
+### 10.3 Vector identity
+
+```
+vector = SHA-256( "merkle-champ/vector/v1" || len (u64)
+               || identity(tree root)   if tailoff > 0
+               || identity(tail leaf)   if len > 0 )
+```
+
+Given `len`, which parts are present and where the tail begins are fixed, so
+the encoding is unambiguous. The empty vector's identity is
+`SHA-256("merkle-champ/vector/v1" || 0u64)`.
+
+### 10.4 Nesting and storage
+
+A nested vector encodes, through `Identify`, as the tag `v`, a `u64` length
+32 and its identity, as a nested map is `m` (section 5). Storing vectors (as
+section 9 stores maps) is not yet specified.

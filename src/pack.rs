@@ -1,9 +1,9 @@
-//! Immutable indexed packs of merkle-champ node preimages.
+//! Immutable indexed packs of node preimages.
 //!
-//! This crate currently reads and writes MCHPACK1. Storage transport and ref
-//! publication belong to the caller. Future pack formats can coexist here
-//! without changing the core `merkle-champ` crate.
-use merkle_champ::Identity;
+//! This module reads and writes MCHPACK1, used by transfs. Storage transport
+//! and ref publication belong to the caller. Future pack formats can coexist
+//! here.
+use crate::Identity;
 use sha2::{Digest, Sha256};
 
 const MAGIC: &[u8; 8] = b"MCHPACK1";

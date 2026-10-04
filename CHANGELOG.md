@@ -2,6 +2,14 @@
 
 ## 0.2.0 (unreleased)
 
+The crate gains a persistent vector, `Vector` (the `vector` module), and the
+pack format that was the separate `merkle-champ-pack` crate (the `pack`
+module). The vector is a 32-way trie whose shape depends only on its length,
+with cached SHA-256 identities (FORMAT.md, section 10), a `Builder` that fills
+leaves in place, and nesting with maps and sets through `Identify` (tag `v`).
+`merkle-champ-pack` users switch to `merkle_champ::pack`; the format, MCHPACK1,
+is unchanged.
+
 Maps can be stored as bytes and loaded back. The identity format is unchanged:
 every identity computed by 0.1 is the same in 0.2, and the golden vectors are
 the same.

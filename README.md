@@ -1,10 +1,5 @@
 # merkle-champ
 
-The workspace also contains `merkle-champ-pack`, a separate crate for immutable
-indexed packs of node preimages. It currently supports the MCHPACK1 format used
-by transfs. Applications that only need the in-memory map can depend on
-`merkle-champ` without pulling in pack APIs.
-
 A persistent hash map and set for content-addressed systems: a CHAMP trie
 (Steindorfer and Vinju, "Optimizing Hash-Array Mapped Tries for Fast and Lean
 Immutable JVM Collections", OOPSLA 2015) with three additions.
@@ -29,6 +24,19 @@ elements).
 Maps and sets nest: in a `ChampMap<K, ChampMap<..>>` every inner map (for example one
 per namespace level) has its own cached identity, which its parent's identity
 covers.
+
+`Vector<T>` is the companion sequence: a 32-way vector trie (Bagwell's, as in
+Clojure) whose shape depends only on its length, with the same lazily cached
+identities, so equal contents have equal identities and a write rehashes only
+its path. `get` and `set` are effectively constant time, `push` and `pop`
+amortised O(1), and a `Builder` fills leaves in place. Against imbl's RRB
+`Vector` it is faster on every read and write measured and equal on push and
+pop; an identity after one write at 1M elements takes about 3 µs, against 11 ms
+to rehash every element ([bench-results/vector-2026-10-04.md](bench-results/vector-2026-10-04.md)).
+Values encode the same way in maps, sets and vectors, and all three nest.
+
+The `pack` module reads and writes MCHPACK1, immutable indexed packs of stored
+nodes, used by transfs. (It was the separate `merkle-champ-pack` crate.)
 
 The identity format is specified in [FORMAT.md](FORMAT.md) and pinned by
 golden vectors. Keys and values must satisfy the consistency requirements in

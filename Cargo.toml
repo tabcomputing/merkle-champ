@@ -2,16 +2,12 @@
 name = "merkle-champ"
 version = "0.2.0"
 edition = "2024"
-description = "Persistent CHAMP hash map and set with canonical shape, cached Merkle identities, and structural diff"
+description = "Persistent CHAMP hash map and set, and a persistent vector, with canonical shape, cached Merkle identities, and structural diff"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/tabcomputing/merkle-champ"
-keywords = ["champ", "hamt", "persistent", "merkle", "content-addressed"]
+keywords = ["champ", "hamt", "vector", "persistent", "merkle"]
 categories = ["data-structures"]
 exclude = ["bench-results/"]
-
-[workspace]
-members = ["crates/merkle-champ-pack"]
-resolver = "2"
 
 [dependencies]
 sha2 = "0.10"
