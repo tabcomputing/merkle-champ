@@ -77,14 +77,17 @@ bitmaps, so the encoding is unambiguous.
 
 Each provided encoding is a one-byte type tag followed, except for `()`, by a
 `u64` byte length and the bytes. Encodings are therefore self-delimiting and
-distinguished by type.
+distinguished by type; for numbers, the length gives the width. Numbers are
+little-endian, and floats are encoded by their bits, so `0.0` and `-0.0`
+differ, as do NaNs with different payloads.
 
 | Type | Tag | Payload |
 |---|---|---|
 | `str`, `String` | `s` | UTF-8 bytes |
 | `[u8]`, `Vec<u8>` | `b` | bytes |
-| `u64` | `u` | 8 bytes |
-| `i64` | `i` | 8 bytes, two's complement |
+| `u8`, `u16`, `u32`, `u64` | `u` | 1, 2, 4 or 8 bytes |
+| `i8`, `i16`, `i32`, `i64` | `i` | 1, 2, 4 or 8 bytes, two's complement |
+| `f32`, `f64` | `f` | 4 or 8 bytes, the IEEE 754 bits |
 | `[u8; 32]` (an identity) | `#` | 32 bytes |
 | nested `ChampMap` | `m` | the nested map's 32-byte identity |
 | nested `ChampSet` | `t` | the nested set's 32-byte identity |
@@ -174,18 +177,26 @@ implementation against an independent computation of this section.
 
 ### 10.1 Canonical shape
 
+A leaf holds `W` elements, fixed by the element type:
+
+- **Packed** element types, the fixed-width numbers of section 5, fill 1,024
+  bytes: `W = 1024 / width`, so 1,024 `u8`, 512 `u16`, 256 `u32` or `f32`,
+  128 `u64`, `i64` or `f64`.
+- **Every other** element type has `W = 32`.
+
 A vector of `len` elements is split by its length alone:
 
 - **The tail** holds the last elements: indexes `tailoff` to `len - 1`, where
-  `tailoff = ((len - 1) / 32) * 32` for `len > 0`, and `tailoff = 0` for the
-  empty vector. A non-empty vector's tail holds 1 to 32 elements.
-- **The tree** holds the first `tailoff` elements, a multiple of 32, and is
-  absent when `tailoff` is 0. Its leaves hold exactly 32 elements each, in
+  `tailoff = ((len - 1) / W) * W` for `len > 0`, and `tailoff = 0` for the
+  empty vector. A non-empty vector's tail holds 1 to `W` elements.
+- **The tree** holds the first `tailoff` elements, a multiple of `W`, and is
+  absent when `tailoff` is 0. Its leaves hold exactly `W` elements each, in
   order. Above them are `h ≥ 1` levels of branches; a branch holds 1 to 32
   children, in order, and every branch except those on the rightmost path is
-  full. `h` is the smallest value with `32^(h + 1) ≥ tailoff`.
+  full. `h` is the smallest value with `W × 32^h ≥ tailoff`.
 
-The shape therefore depends only on `len`, never on how the vector was built.
+The shape therefore depends only on `len` and the element type, never on how
+the vector was built.
 
 ### 10.2 Node identity
 
@@ -194,11 +205,19 @@ little-endian.
 
 ```
 leaf   = SHA-256( "merkle-champ/vector/leaf/v1"   || count (u8) || Identify(e) for each element in order )
+packed = SHA-256( "merkle-champ/vector/packed-leaf/v1" || tag (u8) || width (u8) || count (u16)
+                  || each element's bytes in order )
 branch = SHA-256( "merkle-champ/vector/branch/v1" || count (u8) || identity(child) for each child in order )
 ```
 
-`count` is the number of elements (leaf) or children (branch), 1 to 32 (0 for
-the empty vector's tail).
+`count` is the number of elements (leaf) or children (branch), 1 to `W` or 32
+(0 for the empty vector's tail). A leaf of packed elements is a `packed`
+leaf: `tag` and `width` are the element type's tag and byte width from
+section 5 (`u` and 8 for `u64`), and each element contributes its
+little-endian bytes alone, without a tag or length, since the leaf's header
+gives both. Packing hashes only the elements' bytes, 8 of the 17 an encoded
+`u64` takes and 1 of the 10 for a `u8`, and fills leaves of 1 KB, which keeps
+a byte string's node overhead small.
 
 ### 10.3 Vector identity
 
@@ -208,9 +227,11 @@ vector = SHA-256( "merkle-champ/vector/v1" || len (u64)
                || identity(tail leaf)   if len > 0 )
 ```
 
-Given `len`, which parts are present and where the tail begins are fixed, so
-the encoding is unambiguous. The empty vector's identity is
-`SHA-256("merkle-champ/vector/v1" || 0u64)`.
+Given `len` and the element type, which parts are present and where the tail
+begins are fixed, so the encoding is unambiguous. The element type is in the
+leaves, so vectors of the same numbers in different types differ. The empty
+vector's identity is `SHA-256("merkle-champ/vector/v1" || 0u64)`, whatever
+its element type: there is one empty sequence.
 
 ### 10.4 Nesting and storage
 

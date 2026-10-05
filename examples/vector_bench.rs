@@ -168,4 +168,79 @@ fn main() {
             layered / 1e6
         );
     }
+    bytes();
+}
+
+/// Bytes, packed 1,024 to a leaf, against a `Vec<u8>`, whose content
+/// identity is a SHA-256 of the whole buffer, recomputed after any write.
+fn bytes() {
+    let n = 1_000_000usize;
+    println!("\n## {n} bytes\n");
+    println!("| Workload | Vector<u8> | std Vec<u8> |");
+    println!("|---|---:|---:|");
+    let data: Vec<u8> = (0..n).map(|i| (i * 31 % 251) as u8).collect();
+    let mv: Vector<u8> = data.iter().copied().collect();
+    let mut rng = Rng(9);
+    let idx: Vec<usize> = (0..10_000).map(|_| rng.next() as usize % n).collect();
+    let pair = |name: &str, a: f64, b: f64| println!("| {name} | {a:.2} | {b:.2} |");
+    pair(
+        "build from an iterator (per byte)",
+        time(n, || {
+            black_box(data.iter().copied().collect::<Vector<u8>>());
+        }),
+        time(n, || {
+            black_box(data.iter().copied().collect::<Vec<u8>>());
+        }),
+    );
+    pair(
+        "get, random index",
+        time(idx.len(), || {
+            for &i in &idx {
+                black_box(mv.get(i));
+            }
+        }),
+        time(idx.len(), || {
+            for &i in &idx {
+                black_box(data.get(i));
+            }
+        }),
+    );
+    pair(
+        "iterate (per byte)",
+        time(n, || {
+            black_box(mv.iter().map(|&b| b as u64).sum::<u64>());
+        }),
+        time(n, || {
+            black_box(data.iter().map(|&b| b as u64).sum::<u64>());
+        }),
+    );
+    let flat = |d: &[u8]| {
+        use sha2::{Digest, Sha256};
+        let out: [u8; 32] = Sha256::digest(d).into();
+        out
+    };
+    let cold = {
+        let t = Instant::now();
+        black_box(mv.identity());
+        t.elapsed().as_nanos() as f64
+    };
+    println!(
+        "| first identity, cold | {:.2} ms | {:.2} ms, flat SHA-256 |",
+        cold / 1e6,
+        time(1, || {
+            black_box(flat(&data));
+        }) / 1e6
+    );
+    let mut copy = data.clone();
+    println!(
+        "| identity after one write | {:.2} µs | {:.2} µs, flat SHA-256 |",
+        time(1, || {
+            let v = mv.update(n / 2, 9);
+            black_box(v.identity());
+        }) / 1e3,
+        time(1, || {
+            copy[n / 2] = 9;
+            black_box(flat(&copy));
+        }) / 1e3
+    );
 }

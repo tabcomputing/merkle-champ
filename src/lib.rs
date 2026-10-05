@@ -190,6 +190,23 @@ pub trait Identify {
     /// nested map's nodes, to `objects`. Called by [`ChampMap::save`]. Most
     /// values are stored inline and keep the default, which does nothing.
     fn save_objects(&self, _objects: &mut Objects) {}
+
+    /// How a [`Vector`] of this type fills its leaves (FORMAT.md, section
+    /// 10). `None`, the default, puts 32 elements in a leaf, each encoded with
+    /// [`identify`](Self::identify). Fixed-width numbers give their tag and
+    /// width in bytes, and fill leaves of 1 KB with their little-endian bytes.
+    const PACKED: Option<(u8, u8)> = None;
+
+    /// Writes the bytes of packed elements, in order. Called only for types
+    /// whose [`PACKED`](Self::PACKED) is set.
+    fn pack<S: Sink + ?Sized>(items: &[Self], sink: &mut S)
+    where
+        Self: Sized,
+    {
+        for item in items {
+            item.identify(sink);
+        }
+    }
 }
 
 impl Identify for str {
@@ -212,16 +229,39 @@ impl Identify for Vec<u8> {
         self.as_slice().identify(sink);
     }
 }
-impl Identify for u64 {
-    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
-        write_tagged(sink, b'u', &self.to_le_bytes());
-    }
+/// Fixed-width numbers: a tag (`u` unsigned, `i` signed, `f` floating) and
+/// their little-endian bytes, whose length gives the width. In a vector they
+/// are packed.
+macro_rules! fixed_width {
+    ($($t:ty => $tag:literal),* $(,)?) => {$(
+        impl Identify for $t {
+            fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+                write_tagged(sink, $tag, &self.to_le_bytes());
+            }
+            const PACKED: Option<(u8, u8)> = Some(($tag, std::mem::size_of::<$t>() as u8));
+            fn pack<S: Sink + ?Sized>(items: &[Self], sink: &mut S) {
+                // A leaf at a time, through a buffer, rather than an update
+                // per element.
+                const N: usize = 1024 / std::mem::size_of::<$t>();
+                let mut buf = [0u8; 1024];
+                for chunk in items.chunks(N) {
+                    let mut n = 0;
+                    for item in chunk {
+                        let b = item.to_le_bytes();
+                        buf[n..n + b.len()].copy_from_slice(&b);
+                        n += b.len();
+                    }
+                    sink.update(&buf[..n]);
+                }
+            }
+        }
+    )*};
 }
-impl Identify for i64 {
-    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
-        write_tagged(sink, b'i', &self.to_le_bytes());
-    }
-}
+fixed_width!(
+    u8 => b'u', u16 => b'u', u32 => b'u', u64 => b'u',
+    i8 => b'i', i16 => b'i', i32 => b'i', i64 => b'i',
+    f32 => b'f', f64 => b'f',
+);
 impl Identify for Identity {
     fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
         write_tagged(sink, b'#', self);

@@ -26,13 +26,16 @@ per namespace level) has its own cached identity, which its parent's identity
 covers.
 
 `Vector<T>` is the companion sequence: a 32-way vector trie (Bagwell's, as in
-Clojure) whose shape depends only on its length, with the same lazily cached
-identities, so equal contents have equal identities and a write rehashes only
-its path. `get` and `set` are effectively constant time, `push` and `pop`
-amortised O(1), and a `Builder` fills leaves in place. Against imbl's RRB
-`Vector` it is faster on every read and write measured and equal on push and
-pop; an identity after one write at 1M elements takes about 3 µs, against 11 ms
-to rehash every element ([bench-results/vector-2026-10-04.md](bench-results/vector-2026-10-04.md)).
+Clojure) whose shape depends only on its length and element type, with the
+same lazily cached identities, so equal contents have equal identities and a
+write rehashes only its path. Fixed-width numbers (`u8` to `u64`, `i8` to
+`i64`, `f32`, `f64`) are packed 1 KB to a leaf, so a `Vector<u8>` is a
+compact persistent byte string; other elements go 32 to a leaf. `get` and
+`set` are effectively constant time, `push` and `pop` amortised O(1), and a
+`Builder` fills leaves in place. Against imbl's RRB `Vector` it is faster on
+every read and write measured and equal on push and pop; an identity after
+one write at 1M elements takes about 3 µs, against 11 ms to rehash every
+element ([bench-results/vector-2026-10-04.md](bench-results/vector-2026-10-04.md)).
 Values encode the same way in maps, sets and vectors, and all three nest.
 
 The `pack` module reads and writes MCHPACK1, immutable indexed packs of stored
@@ -67,8 +70,9 @@ assert_eq!(effects.diff(&fewer).len(), 1);
 
 Keys implement `KeyHash` (deterministic 64-bit hash) and `Ord` (orders entries
 that share a full hash). Keys and values implement `Identify` for identities,
-and `Decode` to be loaded back. Implementations are provided for strings, byte
-vectors, `u64`, `i64`, `()`, 32-byte identities, and nested maps and sets.
+and `Decode` to be loaded back. `Identify` is provided for strings, byte
+vectors, the fixed-width integers and floats, `()`, 32-byte identities, and
+nested maps, sets and vectors.
 
 ## Storing and loading
 

@@ -4,9 +4,18 @@
 
 The crate gains a persistent vector, `Vector` (the `vector` module), and the
 pack format that was the separate `merkle-champ-pack` crate (the `pack`
-module). The vector is a 32-way trie whose shape depends only on its length,
-with cached SHA-256 identities (FORMAT.md, section 10), a `Builder` that fills
-leaves in place, and nesting with maps and sets through `Identify` (tag `v`).
+module). The vector is a 32-way trie whose shape depends only on its length
+and element type, with cached SHA-256 identities (FORMAT.md, section 10), a
+`Builder` that fills leaves in place, and nesting with maps and sets through
+`Identify` (tag `v`). Fixed-width numbers are packed 1 KB to a leaf and hashed
+as their bytes (FORMAT.md, section 10.2), so `Vector<u8>` serves as a
+persistent byte string.
+
+`Identify` gains `PACKED` and `pack`, with defaults, for vectors; existing
+implementations need no change. It is now implemented for `u8`, `u16`,
+`u32`, `i8`, `i16`, `i32`, `f32` and `f64` (tags `u`, `i`, `f`). Vector
+operations require `T: Identify`, since the leaf width depends on the element
+type.
 `merkle-champ-pack` users switch to `merkle_champ::pack`; the format, MCHPACK1,
 is unchanged.
 

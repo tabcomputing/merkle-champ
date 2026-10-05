@@ -2,10 +2,12 @@
 //! map: a 32-way vector trie (Bagwell's, as in Clojure) with the same two
 //! properties this crate adds to its CHAMP.
 //!
-//! 1. **Canonical shape.** A vector's structure depends only on its length:
-//!    the last 1 to 32 elements are in a tail, the rest in full leaves of 32
-//!    under the fewest levels of branches that hold them. Pushes, pops,
-//!    updates and rebuilding all give the same tree.
+//! 1. **Canonical shape.** A vector's structure depends only on its length
+//!    and element type: the last elements, up to a leaf's worth, are in a
+//!    tail, the rest in full leaves under the fewest levels of branches of 32
+//!    that hold them. Pushes, pops, updates and rebuilding all give the same
+//!    tree. A leaf holds 32 elements, or, for fixed-width numbers, 1 KB of
+//!    them packed: 1,024 `u8`, 128 `u64` or `f64`.
 //! 2. **Lazily cached identities.** `identity()` is a SHA-256 identity of the
 //!    contents. Each node computes its identity on first request and caches
 //!    it; versions share unchanged nodes, so after a write only the changed
@@ -41,9 +43,27 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 
+/// Branches hold up to 32 children.
 const BITS: u32 = 5;
 const WIDTH: usize = 1 << BITS;
 const MASK: usize = WIDTH - 1;
+/// A packed leaf holds this many bytes of elements.
+const LEAF_BYTES: usize = 1024;
+
+/// The number of elements in a full leaf of `T`, as a power of two: 32, or
+/// 1 KB of packed fixed-width numbers.
+fn leaf_bits<T: Identify>() -> u32 {
+    match T::PACKED {
+        None => BITS,
+        Some((_, width)) => (LEAF_BYTES / width as usize).trailing_zeros(),
+    }
+}
+
+/// The level below a branch at `level`: the leaves (0) under the lowest
+/// branches, whose level is `lb`.
+fn below(level: u32, lb: u32) -> u32 {
+    if level == lb { 0 } else { level - BITS }
+}
 
 enum Node<T> {
     Branch {
@@ -128,10 +148,20 @@ fn node_identity<T: Identify>(node: &Node<T>) -> Identity {
     match node {
         Node::Leaf { items, identity } => *identity.get_or_init(|| {
             let mut h = Sha256::new();
-            Digest::update(&mut h, b"merkle-champ/vector/leaf/v1");
-            Digest::update(&mut h, [items.len() as u8]);
-            for item in items {
-                item.identify(&mut h);
+            match T::PACKED {
+                None => {
+                    Digest::update(&mut h, b"merkle-champ/vector/leaf/v1");
+                    Digest::update(&mut h, [items.len() as u8]);
+                    for item in items {
+                        item.identify(&mut h);
+                    }
+                }
+                Some((tag, width)) => {
+                    Digest::update(&mut h, b"merkle-champ/vector/packed-leaf/v1");
+                    Digest::update(&mut h, [tag, width]);
+                    Digest::update(&mut h, (items.len() as u16).to_le_bytes());
+                    T::pack(items, &mut h);
+                }
             }
             h.finalize().into()
         }),
@@ -147,45 +177,47 @@ fn node_identity<T: Identify>(node: &Node<T>) -> Identity {
     }
 }
 
-/// The index of the first element in the tail.
-fn tailoff(len: usize) -> usize {
-    if len == 0 {
-        0
-    } else {
-        ((len - 1) >> BITS) << BITS
-    }
+/// The index of the first element in the tail, for leaves of `1 << lb`.
+fn tailoff(len: usize, lb: u32) -> usize {
+    if len == 0 { 0 } else { ((len - 1) >> lb) << lb }
 }
 
 /// A path of single-child branches from `level` down to `node`.
-fn new_path<T>(level: u32, node: Arc<Node<T>>) -> Arc<Node<T>> {
+fn new_path<T>(level: u32, lb: u32, node: Arc<Node<T>>) -> Arc<Node<T>> {
     if level == 0 {
         node
     } else {
-        branch(vec![new_path(level - BITS, node)])
+        branch(vec![new_path(below(level, lb), lb, node)])
     }
 }
 
 /// Adds a full leaf as the last leaf under `node`, a branch at `level`.
 /// `index` is the index of the leaf's last element.
-fn push_tail<T: Clone>(level: u32, node: &mut Arc<Node<T>>, full: Arc<Node<T>>, index: usize) {
+fn push_tail<T: Clone>(
+    level: u32,
+    lb: u32,
+    node: &mut Arc<Node<T>>,
+    full: Arc<Node<T>>,
+    index: usize,
+) {
     let children = children_mut(node);
     let sub = (index >> level) & MASK;
-    if level == BITS {
+    if level == lb {
         children.push(full);
     } else if sub < children.len() {
-        push_tail(level - BITS, &mut children[sub], full, index);
+        push_tail(level - BITS, lb, &mut children[sub], full, index);
     } else {
-        children.push(new_path(level - BITS, full));
+        children.push(new_path(level - BITS, lb, full));
     }
 }
 
 /// Removes the last leaf under `node`, a branch at `level`; `index` is an
 /// index in that leaf. Returns whether `node` is left empty.
-fn pop_tail<T: Clone>(level: u32, node: &mut Arc<Node<T>>, index: usize) -> bool {
+fn pop_tail<T: Clone>(level: u32, lb: u32, node: &mut Arc<Node<T>>, index: usize) -> bool {
     let children = children_mut(node);
     let sub = (index >> level) & MASK;
-    if level > BITS {
-        if pop_tail(level - BITS, &mut children[sub], index) {
+    if level > lb {
+        if pop_tail(level - BITS, lb, &mut children[sub], index) {
             children.pop();
         }
     } else {
@@ -194,12 +226,12 @@ fn pop_tail<T: Clone>(level: u32, node: &mut Arc<Node<T>>, index: usize) -> bool
     children.is_empty()
 }
 
-fn set_in<T: Clone>(level: u32, node: &mut Arc<Node<T>>, index: usize, value: T) -> T {
+fn set_in<T: Clone>(level: u32, lb: u32, node: &mut Arc<Node<T>>, index: usize, value: T) -> T {
     if level == 0 {
-        std::mem::replace(&mut items_mut(node)[index & MASK], value)
+        std::mem::replace(&mut items_mut(node)[index & ((1 << lb) - 1)], value)
     } else {
         let sub = (index >> level) & MASK;
-        set_in(level - BITS, &mut children_mut(node)[sub], index, value)
+        set_in(below(level, lb), lb, &mut children_mut(node)[sub], index, value)
     }
 }
 
@@ -210,7 +242,8 @@ pub struct Vector<T> {
     shift: u32,
     /// The first `tailoff(len)` elements, or `None` when that is zero.
     root: Option<Arc<Node<T>>>,
-    /// A leaf with the last elements: 1 to 32 of them, none when empty.
+    /// A leaf with the last elements: 1 to a full leaf of them, none when
+    /// empty.
     tail: Arc<Node<T>>,
 }
 
@@ -225,11 +258,11 @@ impl<T> Clone for Vector<T> {
     }
 }
 
-impl<T> Default for Vector<T> {
+impl<T: Identify> Default for Vector<T> {
     fn default() -> Self {
         Vector {
             len: 0,
-            shift: BITS,
+            shift: leaf_bits::<T>(),
             root: None,
             tail: leaf(Vec::new()),
         }
@@ -237,11 +270,6 @@ impl<T> Default for Vector<T> {
 }
 
 impl<T> Vector<T> {
-    /// The empty vector.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn len(&self) -> usize {
         self.len
     }
@@ -249,23 +277,32 @@ impl<T> Vector<T> {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+}
+
+impl<T: Identify> Vector<T> {
+    /// The empty vector.
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// The leaf holding element `index`, which must be in range.
     fn leaf_for(&self, index: usize) -> &[T] {
-        if index >= tailoff(self.len) {
+        let lb = leaf_bits::<T>();
+        if index >= tailoff(self.len, lb) {
             return self.tail.items();
         }
         let mut node = self.root.as_ref().expect("a tree below the tail");
         let mut level = self.shift;
         while level > 0 {
             node = &node.children()[(index >> level) & MASK];
-            level -= BITS;
+            level = below(level, lb);
         }
         node.items()
     }
 
     pub fn get(&self, index: usize) -> Option<&T> {
-        (index < self.len).then(|| &self.leaf_for(index)[index & MASK])
+        let mask = (1 << leaf_bits::<T>()) - 1;
+        (index < self.len).then(|| &self.leaf_for(index)[index & mask])
     }
 
     pub fn first(&self) -> Option<&T> {
@@ -282,6 +319,7 @@ impl<T> Vector<T> {
             index: 0,
             end: self.len,
             leaf: &[],
+            mask: (1 << leaf_bits::<T>()) - 1,
         }
     }
 
@@ -298,11 +336,12 @@ impl<T> Vector<T> {
     }
 }
 
-impl<T: Clone> Vector<T> {
+impl<T: Clone + Identify> Vector<T> {
     /// Appends an element.
     pub fn push(&mut self, value: T) {
-        let in_tail = self.len - tailoff(self.len);
-        if in_tail < WIDTH {
+        let lb = leaf_bits::<T>();
+        let in_tail = self.len - tailoff(self.len, lb);
+        if in_tail < 1 << lb {
             items_mut(&mut self.tail).push(value);
             self.len += 1;
             return;
@@ -312,15 +351,16 @@ impl<T: Clone> Vector<T> {
         match &mut self.root {
             None => {
                 self.root = Some(branch(vec![full]));
-                self.shift = BITS;
+                self.shift = lb;
             }
             Some(root) => {
+                // The root's children cover 32 << shift elements.
                 if (self.len >> BITS) > (1 << self.shift) {
                     let old = root.clone();
-                    *root = branch(vec![old, new_path(self.shift, full)]);
+                    *root = branch(vec![old, new_path(self.shift, lb, full)]);
                     self.shift += BITS;
                 } else {
-                    push_tail(self.shift, root, full, self.len - 1);
+                    push_tail(self.shift, lb, root, full, self.len - 1);
                 }
             }
         }
@@ -332,7 +372,8 @@ impl<T: Clone> Vector<T> {
         if self.len == 0 {
             return None;
         }
-        let in_tail = self.len - tailoff(self.len);
+        let lb = leaf_bits::<T>();
+        let in_tail = self.len - tailoff(self.len, lb);
         if in_tail > 1 || self.len == 1 {
             let value = items_mut(&mut self.tail).pop();
             self.len -= 1;
@@ -347,15 +388,15 @@ impl<T: Clone> Vector<T> {
             let mut level = self.shift;
             while level > 0 {
                 node = &node.children()[(index >> level) & MASK];
-                level -= BITS;
+                level = below(level, lb);
             }
             node.clone()
         };
         let root = self.root.as_mut().expect("a tree below the tail");
-        if pop_tail(self.shift, root, index) {
+        if pop_tail(self.shift, lb, root, index) {
             self.root = None;
-            self.shift = BITS;
-        } else if self.shift > BITS && root.children().len() == 1 {
+            self.shift = lb;
+        } else if self.shift > lb && root.children().len() == 1 {
             let only = root.children()[0].clone();
             *root = only;
             self.shift -= BITS;
@@ -371,7 +412,8 @@ impl<T: Clone> Vector<T> {
         if index >= self.len {
             return Err(value);
         }
-        let off = tailoff(self.len);
+        let lb = leaf_bits::<T>();
+        let off = tailoff(self.len, lb);
         if index >= off {
             return Ok(std::mem::replace(
                 &mut items_mut(&mut self.tail)[index - off],
@@ -379,7 +421,7 @@ impl<T: Clone> Vector<T> {
             ));
         }
         let root = self.root.as_mut().expect("a tree below the tail");
-        Ok(set_in(self.shift, root, index, value))
+        Ok(set_in(self.shift, lb, root, index, value))
     }
 
     /// A new vector with element `index` replaced. Panics if `index` is out
@@ -418,12 +460,13 @@ impl<T: Clone> Vector<T> {
 
     /// Checks the canonical shape (FORMAT.md, section 10.1). For tests.
     pub fn check_invariants(&self) -> Result<(), String> {
-        let off = tailoff(self.len);
+        let lb = leaf_bits::<T>();
+        let off = tailoff(self.len, lb);
         let in_tail = self.tail.items().len();
         if in_tail != self.len - off {
             return Err(format!("tail holds {in_tail}, expected {}", self.len - off));
         }
-        if self.len > 0 && !(1..=WIDTH).contains(&in_tail) {
+        if self.len > 0 && !(1..=1 << lb).contains(&in_tail) {
             return Err(format!("tail holds {in_tail}"));
         }
         match &self.root {
@@ -431,14 +474,15 @@ impl<T: Clone> Vector<T> {
             None => Err(format!("no tree for {off} elements")),
             Some(_) if off == 0 => Err("a tree with nothing in it".into()),
             Some(root) => {
+                // The fewest branch levels, at least one, that hold `off`.
                 let mut h = 1;
-                while WIDTH.pow(h + 1) < off {
+                while (1usize << lb) * WIDTH.pow(h) < off {
                     h += 1;
                 }
-                if self.shift != BITS * h {
+                if self.shift != lb + BITS * (h - 1) {
                     return Err(format!("shift {} for {off} elements", self.shift));
                 }
-                let counted = check_node(root, self.shift, true)?;
+                let counted = check_node(root, self.shift, lb, true)?;
                 if counted != off {
                     return Err(format!("tree holds {counted}, expected {off}"));
                 }
@@ -450,10 +494,10 @@ impl<T: Clone> Vector<T> {
 
 /// Counts the elements under a node, checking that leaves are full and that
 /// branches off the rightmost path are full.
-fn check_node<T>(node: &Node<T>, level: u32, rightmost: bool) -> Result<usize, String> {
+fn check_node<T>(node: &Node<T>, level: u32, lb: u32, rightmost: bool) -> Result<usize, String> {
     if level == 0 {
         return match node {
-            Node::Leaf { items, .. } if items.len() == WIDTH => Ok(WIDTH),
+            Node::Leaf { items, .. } if items.len() == 1 << lb => Ok(1 << lb),
             Node::Leaf { items, .. } => Err(format!("a leaf of {}", items.len())),
             Node::Branch { .. } => Err("a branch at leaf level".into()),
         };
@@ -469,7 +513,7 @@ fn check_node<T>(node: &Node<T>, level: u32, rightmost: bool) -> Result<usize, S
     }
     let mut total = 0;
     for (i, child) in children.iter().enumerate() {
-        total += check_node(child, level - BITS, rightmost && i + 1 == children.len())?;
+        total += check_node(child, below(level, lb), lb, rightmost && i + 1 == children.len())?;
     }
     Ok(total)
 }
@@ -516,16 +560,16 @@ pub struct Builder<T> {
     chunk: Vec<T>,
 }
 
-impl<T> Default for Builder<T> {
+impl<T: Identify> Default for Builder<T> {
     fn default() -> Self {
         Builder {
             leaves: Vec::new(),
-            chunk: Vec::with_capacity(WIDTH),
+            chunk: Vec::with_capacity(1 << leaf_bits::<T>()),
         }
     }
 }
 
-impl<T> Builder<T> {
+impl<T: Identify> Builder<T> {
     pub fn new() -> Self {
         Self::default()
     }
@@ -533,15 +577,16 @@ impl<T> Builder<T> {
     /// Appends an element. A full chunk becomes a leaf only once another
     /// element follows it, since the last chunk is the vector's tail.
     pub fn push(&mut self, value: T) {
-        if self.chunk.len() == WIDTH {
-            let full = std::mem::replace(&mut self.chunk, Vec::with_capacity(WIDTH));
+        let width = 1 << leaf_bits::<T>();
+        if self.chunk.len() == width {
+            let full = std::mem::replace(&mut self.chunk, Vec::with_capacity(width));
             self.leaves.push(leaf(full));
         }
         self.chunk.push(value);
     }
 
     pub fn len(&self) -> usize {
-        self.leaves.len() * WIDTH + self.chunk.len()
+        (self.leaves.len() << leaf_bits::<T>()) + self.chunk.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -550,11 +595,12 @@ impl<T> Builder<T> {
 
     pub fn build(self) -> Vector<T> {
         let len = self.len();
+        let lb = leaf_bits::<T>();
         let tail = leaf(self.chunk);
         if self.leaves.is_empty() {
             return Vector {
                 len,
-                shift: BITS,
+                shift: lb,
                 root: None,
                 tail,
             };
@@ -569,7 +615,7 @@ impl<T> Builder<T> {
             while nodes.peek().is_some() {
                 next.push(branch(nodes.by_ref().take(WIDTH).collect()));
             }
-            shift += BITS;
+            shift = if shift == 0 { lb } else { shift + BITS };
             if next.len() == 1 {
                 return Vector {
                     len,
@@ -583,7 +629,7 @@ impl<T> Builder<T> {
     }
 }
 
-impl<T> FromIterator<T> for Vector<T> {
+impl<T: Identify> FromIterator<T> for Vector<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut b = Builder::new();
         for value in iter {
@@ -593,7 +639,7 @@ impl<T> FromIterator<T> for Vector<T> {
     }
 }
 
-impl<T: Clone> Extend<T> for Vector<T> {
+impl<T: Clone + Identify> Extend<T> for Vector<T> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
         for value in iter {
             self.push(value);
@@ -601,21 +647,21 @@ impl<T: Clone> Extend<T> for Vector<T> {
     }
 }
 
-impl<T: PartialEq> PartialEq for Vector<T> {
+impl<T: PartialEq + Identify> PartialEq for Vector<T> {
     fn eq(&self, other: &Self) -> bool {
         self.ptr_eq(other) || (self.len == other.len && self.iter().eq(other.iter()))
     }
 }
 
-impl<T: Eq> Eq for Vector<T> {}
+impl<T: Eq + Identify> Eq for Vector<T> {}
 
-impl<T: fmt::Debug> fmt::Debug for Vector<T> {
+impl<T: fmt::Debug + Identify> fmt::Debug for Vector<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.iter()).finish()
     }
 }
 
-impl<'a, T> IntoIterator for &'a Vector<T> {
+impl<'a, T: Identify> IntoIterator for &'a Vector<T> {
     type Item = &'a T;
     type IntoIter = Iter<'a, T>;
     fn into_iter(self) -> Iter<'a, T> {
@@ -629,16 +675,18 @@ pub struct Iter<'a, T> {
     index: usize,
     end: usize,
     leaf: &'a [T],
+    /// One less than the number of elements in a full leaf.
+    mask: usize,
 }
 
-impl<'a, T> Iterator for Iter<'a, T> {
+impl<'a, T: Identify> Iterator for Iter<'a, T> {
     type Item = &'a T;
     fn next(&mut self) -> Option<&'a T> {
         if self.index >= self.end {
             return None;
         }
-        if self.leaf.is_empty() || self.index & MASK == 0 {
-            let offset = self.index & MASK;
+        if self.leaf.is_empty() || self.index & self.mask == 0 {
+            let offset = self.index & self.mask;
             self.leaf = &self.vector.leaf_for(self.index)[offset..];
         }
         let (first, rest) = self.leaf.split_first()?;
@@ -653,4 +701,4 @@ impl<'a, T> Iterator for Iter<'a, T> {
     }
 }
 
-impl<T> ExactSizeIterator for Iter<'_, T> {}
+impl<T: Identify> ExactSizeIterator for Iter<'_, T> {}
