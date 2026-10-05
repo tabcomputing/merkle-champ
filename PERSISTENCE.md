@@ -253,10 +253,28 @@ This is a layer above the map, in the same store:
 Big values stay out of the tree. A value is the identity of a blob, which
 lives in the same `NodeStore` under a blob domain. `Identity` values are
 already supported (tag `#`). Large files are split by content-defined chunking
-(for example FastCDC, averaging around 64 KiB), and a file is a list of chunk
-identities, itself a small tree for very large files. Chunks deduplicate
-across versions. Deduplicating across users would reveal which data they have
-in common, so stores stay per user (per tenant).
+(for example FastCDC), and a file is a list of chunk identities, itself a
+small tree for very large files. Chunks deduplicate across versions.
+Deduplicating across users would reveal which data they have in common, so
+stores stay per user (per tenant).
+
+**Amended 2026-10-05: chunk size and the chunk list.** This note first
+suggested an average of about 64 KiB. Measurements from transfs (its
+`docs/chunk-study.md`) argue for **4 to 16 KiB**:
+- For scattered edits, a 64 KiB average costs several times more than
+  4 KiB. A long vertical stroke in an XCF image stores 58% of the file at
+  64 KiB and 10.5% at 4 KiB; ordinary SQLite updates store 74% and 16%.
+- For SQLite, fixed chunks of exactly one page beat FastCDC: 8.8% for
+  ordinary updates, against 16% for FastCDC at 4 KiB.
+- Small chunks make a big file's chunk list long (about 2.5 million entries
+  for 10 GB at 4 KiB). That is affordable only if the list is cheap to edit.
+
+So the chunk list is a merkle-champ `Sequence` (FORMAT.md section 10): a
+content-defined tree whose nodes end where a rolling hash says, so inserting
+chunks rewrites a few nodes per level rather than the rest of the list, and
+equal lists have equal identities. To find the chunk holding a byte offset,
+branches will carry each child's byte length as well as its element count,
+the same per-child sums March's strings need for code points and newlines.
 
 ## 11. Trust and secrecy
 
