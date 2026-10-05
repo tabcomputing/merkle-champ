@@ -88,6 +88,7 @@ differ, as do NaNs with different payloads.
 | `u8`, `u16`, `u32`, `u64` | `u` | 1, 2, 4 or 8 bytes |
 | `i8`, `i16`, `i32`, `i64` | `i` | 1, 2, 4 or 8 bytes, two's complement |
 | `f32`, `f64` | `f` | 4 or 8 bytes, the IEEE 754 bits |
+| `TextByte` (a byte of UTF-8 text) | `s` | 1 byte, as a one-byte string |
 | `[u8; 32]` (an identity) | `#` | 32 bytes |
 | nested `ChampMap` | `m` | the nested map's 32-byte identity |
 | nested `ChampSet` | `t` | the nested set's 32-byte identity |
@@ -238,16 +239,33 @@ bits than the one below, so a branch has 32 children on average.
 All integers are little-endian.
 
 ```
-leaf   = SHA-256( "merkle-champ/sequence/leaf/v1" || count (u16) || Identify(e) for each element )
-packed = SHA-256( "merkle-champ/sequence/packed-leaf/v1" || tag (u8) || width (u8) || count (u16)
-                  || each element's little-endian bytes )
-branch = SHA-256( "merkle-champ/sequence/branch/v1" || count (u16)
-                  || for each child: its length in elements (u64) || identity(child) )
+leaf     = SHA-256( "merkle-champ/sequence/leaf/v1" || count (u16) || Identify(e) for each element )
+packed   = SHA-256( "merkle-champ/sequence/packed-leaf/v1" || tag (u8) || width (u8) || count (u16)
+                    || each element's little-endian bytes )
+branch   = SHA-256( "merkle-champ/sequence/branch/v1" || count (u16)
+                    || for each child: its length in elements (u64) || identity(child) )
+measured = SHA-256( "merkle-champ/sequence/measured-branch/v1" || count (u16) || m (u8)
+                    || for each child: its length in elements (u64)
+                       || its m measures (u64 each) || identity(child) )
 ```
 
 A leaf of packed elements is a `packed` leaf, with the type's tag and width
 from section 5. A branch records its children's lengths, so a stored branch
 is enough to find which child holds the element at an index.
+
+**Measures.** An element type may declare `m` quantities per element, summed
+over each child, beyond the count: a chunk's byte length, or a text byte's
+code points and newlines. Its branches are `measured` branches, which record
+each child's sums, so a stored branch is also enough to find the element
+where a running total passes a value: the chunk holding a byte offset, or
+the byte where the n-th character starts. A type without measures uses
+`branch`. Leaves are the same either way, since their measures follow from
+their elements.
+
+`TextByte`, a byte of UTF-8 text, is packed under the tag `s` with width 1,
+and has two measures: code points (1 for each byte that starts one, that is
+not of the form `10xxxxxx`) and newlines (1 for byte `0x0a`). So text and a
+byte sequence with the same bytes have different identities.
 
 ### 10.5 Sequence identity
 
@@ -267,6 +285,7 @@ element type.
 | `u8`, element `i` = `7i mod 256`, 5,000 of them | `dba099dab8dd20cde67d061f0558ebf40bfd1925a7ed03259d80c55bab9d8ec0` |
 | strings `"item 0"` to `"item 99"` | `19dc2f35f57068d900061e75043868be820242dd773aa5057cae757db6e18266` |
 | empty | `06b6c643f3db9aaa0a211a969915be4d471aa54a0f3af8202570dc23ac0a0b20` |
+| text: `"line i é中😀\n"` for `i` from 0 to 1,999, 38,890 bytes | `8f945ddaa0ffebc4c53bd7c8930e76bd6b1ab901dc5284414aa982595a690d8b` |
 
 ### 10.7 Edits (informative)
 

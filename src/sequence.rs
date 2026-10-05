@@ -40,6 +40,8 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 
+/// The most measures an element type may declare.
+const MAX_MEASURES: usize = 8;
 /// Each level above the leaves needs this many more zero bits to cut.
 const LEVEL_BITS: u32 = 5;
 const MIN_FANOUT: usize = 2;
@@ -146,6 +148,9 @@ enum Node<T> {
         items: Vec<T>,
         /// The cut level after the last element.
         end: i8,
+        /// The element type's measures, summed over the node: empty for most
+        /// types.
+        sums: Box<[u64]>,
         identity: OnceLock<Identity>,
     },
     Branch {
@@ -154,6 +159,7 @@ enum Node<T> {
         ends: Vec<usize>,
         end: i8,
         height: u8,
+        sums: Box<[u64]>,
         identity: OnceLock<Identity>,
     },
 }
@@ -168,6 +174,11 @@ impl<T> Node<T> {
     fn end(&self) -> i8 {
         match self {
             Node::Leaf { end, .. } | Node::Branch { end, .. } => *end,
+        }
+    }
+    fn sums(&self) -> &[u64] {
+        match self {
+            Node::Leaf { sums, .. } | Node::Branch { sums, .. } => sums,
         }
     }
     fn height(&self) -> u8 {
@@ -199,10 +210,17 @@ impl<T> Node<T> {
     }
 }
 
-fn leaf<T>(items: Vec<T>, end: i8) -> Arc<Node<T>> {
+fn leaf<T: Identify>(items: Vec<T>, end: i8) -> Arc<Node<T>> {
+    let mut sums = vec![0; T::MEASURES].into_boxed_slice();
+    if T::MEASURES > 0 {
+        for item in &items {
+            item.measure(&mut sums);
+        }
+    }
     Arc::new(Node::Leaf {
         items,
         end,
+        sums,
         identity: OnceLock::new(),
     })
 }
@@ -210,9 +228,13 @@ fn leaf<T>(items: Vec<T>, end: i8) -> Arc<Node<T>> {
 fn branch<T>(children: Vec<Arc<Node<T>>>) -> Arc<Node<T>> {
     let mut ends = Vec::with_capacity(children.len());
     let mut total = 0;
+    let mut sums = vec![0; children[0].sums().len()].into_boxed_slice();
     for c in &children {
         total += c.len();
         ends.push(total);
+        for (s, x) in sums.iter_mut().zip(c.sums()) {
+            *s += x;
+        }
     }
     let end = children.last().expect("a branch has children").end();
     let height = children[0].height() + 1;
@@ -221,6 +243,7 @@ fn branch<T>(children: Vec<Arc<Node<T>>>) -> Arc<Node<T>> {
         ends,
         end,
         height,
+        sums,
         identity: OnceLock::new(),
     })
 }
@@ -254,10 +277,19 @@ fn node_identity<T: Identify>(node: &Node<T>) -> Identity {
             ..
         } => *identity.get_or_init(|| {
             let mut h = Sha256::new();
-            Digest::update(&mut h, b"merkle-champ/sequence/branch/v1");
-            Digest::update(&mut h, (children.len() as u16).to_le_bytes());
+            if T::MEASURES == 0 {
+                Digest::update(&mut h, b"merkle-champ/sequence/branch/v1");
+                Digest::update(&mut h, (children.len() as u16).to_le_bytes());
+            } else {
+                Digest::update(&mut h, b"merkle-champ/sequence/measured-branch/v1");
+                Digest::update(&mut h, (children.len() as u16).to_le_bytes());
+                Digest::update(&mut h, [T::MEASURES as u8]);
+            }
             for child in children {
                 Digest::update(&mut h, (child.len() as u64).to_le_bytes());
+                for s in child.sums() {
+                    Digest::update(&mut h, s.to_le_bytes());
+                }
                 Digest::update(&mut h, node_identity(child));
             }
             h.finalize().into()
@@ -698,6 +730,79 @@ impl<T: Clone + Identify> Sequence<T> {
         Self::join(&tail, range.end - range.start, [], &empty, 0)
     }
 
+    /// The element type's measures summed over the whole sequence (FORMAT.md,
+    /// section 10.4): for text, its code points and newlines.
+    pub fn measures(&self) -> Vec<u64> {
+        self.root
+            .as_ref()
+            .map_or_else(|| vec![0; T::MEASURES], |r| r.sums().to_vec())
+    }
+
+    /// The index of the element where measure `field`'s running total passes
+    /// `target`: the element `i` with total before `i` ≤ `target` < total
+    /// through `i`. For text, field 0 and target `k` give the byte where the
+    /// `k`-th code point starts. `None` if the total never passes it. One
+    /// descent, using the sums the branches keep.
+    pub fn locate(&self, field: usize, mut target: u64) -> Option<usize> {
+        assert!(field < T::MEASURES && T::MEASURES <= MAX_MEASURES, "no such measure");
+        let mut node = &**self.root.as_ref()?;
+        if target >= node.sums()[field] {
+            return None;
+        }
+        let mut index = 0;
+        while node.height() > 0 {
+            let children = node.children();
+            let mut i = 0;
+            loop {
+                let s = children[i].sums()[field];
+                if target < s {
+                    break;
+                }
+                target -= s;
+                index += children[i].len();
+                i += 1;
+            }
+            node = &children[i];
+        }
+        for item in node.items() {
+            let mut sums = [0; MAX_MEASURES];
+            item.measure(&mut sums[..T::MEASURES]);
+            if target < sums[field] {
+                return Some(index);
+            }
+            target -= sums[field];
+            index += 1;
+        }
+        None
+    }
+
+    /// The running total of measure `field` over the elements before
+    /// `index`: for text, field 0 turns a byte offset into a code point
+    /// index.
+    pub fn prefix(&self, field: usize, mut index: usize) -> u64 {
+        assert!(field < T::MEASURES && T::MEASURES <= MAX_MEASURES, "no such measure");
+        let Some(root) = self.root.as_ref() else {
+            return 0;
+        };
+        let mut node = &**root;
+        let mut total = 0;
+        if index >= node.len() {
+            return node.sums()[field];
+        }
+        while node.height() > 0 {
+            let (i, rest) = node.child_for(index);
+            total += node.children()[..i].iter().map(|c| c.sums()[field]).sum::<u64>();
+            node = &node.children()[i];
+            index = rest;
+        }
+        for item in &node.items()[..index] {
+            let mut sums = [0; MAX_MEASURES];
+            item.measure(&mut sums[..T::MEASURES]);
+            total += sums[field];
+        }
+        total
+    }
+
     /// The sequence's SHA-256 identity. Node identities are cached.
     pub fn identity(&self) -> Identity {
         let mut h = Sha256::new();
@@ -870,5 +975,84 @@ impl<'a, T> Iterator for Iter<'a, T> {
                 }
             }
         }
+    }
+}
+
+/// A byte of UTF-8 text, the element of `Sequence<TextByte>`. It is packed
+/// like a `u8`, under the string tag `s`, so text and byte sequences differ,
+/// and measured in code points (field 0, counting each byte that starts one)
+/// and newlines (field 1), so a stored branch is enough to find the n-th
+/// character or line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TextByte(pub u8);
+
+impl Identify for TextByte {
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+        crate::write_tagged(sink, b's', &[self.0]);
+    }
+    const PACKED: Option<(u8, u8)> = Some((b's', 1));
+    fn pack<S: Sink + ?Sized>(items: &[Self], sink: &mut S) {
+        let mut buf = [0u8; 1024];
+        for chunk in items.chunks(buf.len()) {
+            for (b, t) in buf.iter_mut().zip(chunk) {
+                *b = t.0;
+            }
+            sink.update(&buf[..chunk.len()]);
+        }
+    }
+    const MEASURES: usize = 2;
+    fn measure(&self, sums: &mut [u64]) {
+        if self.0 & 0xc0 != 0x80 {
+            sums[0] += 1;
+        }
+        if self.0 == b'\n' {
+            sums[1] += 1;
+        }
+    }
+}
+
+impl Sequence<TextByte> {
+    /// The text of a string.
+    pub fn text(s: &str) -> Self {
+        s.bytes().map(TextByte).collect()
+    }
+
+    /// The bytes, as a string if they are valid UTF-8.
+    pub fn to_text(&self) -> Option<String> {
+        String::from_utf8(self.iter().map(|b| b.0).collect()).ok()
+    }
+
+    /// The number of code points.
+    pub fn chars(&self) -> u64 {
+        self.measures()[0]
+    }
+
+    /// The byte where code point `k` starts, or the length in bytes for the
+    /// end.
+    pub fn char_start(&self, k: u64) -> Option<usize> {
+        if k == self.chars() {
+            return Some(self.len());
+        }
+        self.locate(0, k)
+    }
+
+    /// Code point `k`, decoded.
+    pub fn char_at(&self, k: u64) -> Option<char> {
+        let start = self.locate(0, k)?;
+        let bytes: Vec<u8> = self.iter_from(start).take(4).map(|b| b.0).collect();
+        let len = match bytes[0] {
+            b if b < 0x80 => 1,
+            b if b >= 0xf0 => 4,
+            b if b >= 0xe0 => 3,
+            _ => 2,
+        };
+        std::str::from_utf8(bytes.get(..len)?).ok()?.chars().next()
+    }
+
+    /// Code points `range.start` to `range.end - 1`.
+    pub fn char_slice(&self, range: std::ops::Range<u64>) -> Option<Self> {
+        let a = self.char_start(range.start)?;
+        let b = self.char_start(range.end)?;
+        (a <= b).then(|| self.slice(a..b))
     }
 }

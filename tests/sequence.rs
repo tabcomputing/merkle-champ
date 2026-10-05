@@ -229,6 +229,10 @@ mod reference {
         fn leaf(items: &[Self]) -> (&'static [u8], Vec<u8>)
         where
             Self: Sized;
+        /// Quantities summed in branches (FORMAT.md 10.4); none by default.
+        fn measures(&self) -> Vec<u64> {
+            Vec::new()
+        }
     }
 
     fn word_print(w: u64) -> u64 {
@@ -288,6 +292,19 @@ mod reference {
         }
     }
 
+    impl Item for merkle_champ::sequence::TextByte {
+        const TARGET: usize = 1_024;
+        fn print(&self) -> u64 {
+            word_print(u64::from(self.0))
+        }
+        fn leaf(items: &[Self]) -> (&'static [u8], Vec<u8>) {
+            packed(b's', 1, items.len(), items.iter().map(|b| b.0).collect())
+        }
+        fn measures(&self) -> Vec<u64> {
+            vec![u64::from(self.0 & 0xc0 != 0x80), u64::from(self.0 == b'\n')]
+        }
+    }
+
     fn sha(parts: &[&[u8]]) -> [u8; 32] {
         let mut h = Sha256::new();
         for p in parts {
@@ -301,8 +318,18 @@ mod reference {
         if z < hit_bits { -1 } else { ((z - hit_bits) / 5) as i32 }
     }
 
-    /// (identity, length, end level) of each node of the tree, by level.
-    pub fn levels<T: Item>(xs: &[T]) -> Vec<Vec<([u8; 32], u64, i32)>> {
+    /// A node: identity, length, end level, and measures summed.
+    pub type RefNode = ([u8; 32], u64, i32, Vec<u64>);
+
+    fn sum(a: &[u64], b: &[u64]) -> Vec<u64> {
+        if a.is_empty() {
+            return b.to_vec();
+        }
+        a.iter().zip(b).map(|(x, y)| x + y).collect()
+    }
+
+    /// Each node of the tree, by level.
+    pub fn levels<T: Item>(xs: &[T]) -> Vec<Vec<RefNode>> {
         let (min, max) = (T::TARGET / 4, T::TARGET * 4);
         let hit_bits = T::TARGET.trailing_zeros();
         let mut h = 0u64;
@@ -313,13 +340,14 @@ mod reference {
                 level(h, hit_bits)
             })
             .collect();
-        let mut nodes = Vec::new();
+        let mut nodes: Vec<RefNode> = Vec::new();
         let mut start = 0;
         for i in 0..xs.len() {
             let count = i - start + 1;
             if (count >= min && lv[i] >= 0) || count == max || i + 1 == xs.len() {
                 let (domain, body) = T::leaf(&xs[start..=i]);
-                nodes.push((sha(&[domain, &body]), count as u64, lv[i]));
+                let sums = xs[start..=i].iter().fold(Vec::new(), |acc, x| sum(&acc, &x.measures()));
+                nodes.push((sha(&[domain, &body]), count as u64, lv[i], sums));
                 start = i + 1;
             }
         }
@@ -327,19 +355,30 @@ mod reference {
         let mut level_no = 1;
         while nodes.len() > 1 {
             let mut next = Vec::new();
-            let mut group: Vec<([u8; 32], u64, i32)> = Vec::new();
+            let mut group: Vec<RefNode> = Vec::new();
             for (k, node) in nodes.iter().enumerate() {
-                group.push(*node);
+                group.push(node.clone());
                 let n = group.len();
                 if (n >= 2 && node.2 >= level_no) || n == 128 || k + 1 == nodes.len() {
-                    let mut body = (n as u16).to_le_bytes().to_vec();
-                    for (id, len, _) in &group {
+                    let fields = group[0].3.len();
+                    let (domain, mut body): (&[u8], Vec<u8>) = if fields == 0 {
+                        (b"merkle-champ/sequence/branch/v1", (n as u16).to_le_bytes().to_vec())
+                    } else {
+                        let mut b = (n as u16).to_le_bytes().to_vec();
+                        b.push(fields as u8);
+                        (b"merkle-champ/sequence/measured-branch/v1", b)
+                    };
+                    for (id, len, _, sums) in &group {
                         body.extend(len.to_le_bytes());
+                        for x in sums {
+                            body.extend(x.to_le_bytes());
+                        }
                         body.extend(id);
                     }
-                    let id = sha(&[b"merkle-champ/sequence/branch/v1", &body]);
+                    let id = sha(&[domain, &body]);
                     let len = group.iter().map(|g| g.1).sum();
-                    next.push((id, len, node.2));
+                    let sums = group.iter().fold(Vec::new(), |acc, g| sum(&acc, &g.3));
+                    next.push((id, len, node.2, sums));
                     group.clear();
                 }
             }
@@ -353,7 +392,7 @@ mod reference {
     pub fn identity<T: Item>(xs: &[T]) -> [u8; 32] {
         let len = (xs.len() as u64).to_le_bytes();
         match levels(xs).last().and_then(|top| top.first()) {
-            Some((root, _, _)) => sha(&[b"merkle-champ/sequence/v1", &len, root]),
+            Some((root, _, _, _)) => sha(&[b"merkle-champ/sequence/v1", &len, root]),
             None => sha(&[b"merkle-champ/sequence/v1", &len]),
         }
     }
@@ -482,8 +521,11 @@ fn golden_identities() {
         hex(bytes.iter().copied().collect::<Sequence<u8>>().identity()),
         hex(strings.iter().cloned().collect::<Sequence<String>>().identity()),
         hex(Sequence::<u64>::new().identity()),
+        hex(Sequence::text(&golden_text()).identity()),
     ];
     assert_eq!(got, GOLDEN);
+    let text: Vec<TextByte> = golden_text().bytes().map(TextByte).collect();
+    assert_eq!(hex(reference::identity(&text)), GOLDEN[4]);
     // The reference agrees.
     assert_eq!(hex(reference::identity(&xs)), GOLDEN[0]);
     assert_eq!(hex(reference::identity(&bytes)), GOLDEN[1]);
@@ -491,11 +533,17 @@ fn golden_identities() {
     assert_eq!(hex(reference::identity::<u64>(&[])), GOLDEN[3]);
 }
 
-const GOLDEN: [&str; 4] = [
+/// Text with characters of every UTF-8 width, over many leaves.
+fn golden_text() -> String {
+    (0..2_000).map(|i| format!("line {i} é中😀\n")).collect()
+}
+
+const GOLDEN: [&str; 5] = [
     "7a25cee465767ef587d2a0dd984ccf06fb5ec95d94504665282822413c972970",
     "dba099dab8dd20cde67d061f0558ebf40bfd1925a7ed03259d80c55bab9d8ec0",
     "19dc2f35f57068d900061e75043868be820242dd773aa5057cae757db6e18266",
     "06b6c643f3db9aaa0a211a969915be4d471aa54a0f3af8202570dc23ac0a0b20",
+    "8f945ddaa0ffebc4c53bd7c8930e76bd6b1ab901dc5284414aa982595a690d8b",
 ];
 
 #[test]
@@ -525,4 +573,86 @@ fn the_builder_is_collect() {
     }
     let s = b.build();
     assert_eq!(s.identity(), (0..10_000u64).collect::<Sequence<u64>>().identity());
+}
+
+// ------------------------------------------------------------------ text
+
+use merkle_champ::sequence::TextByte;
+
+impl Elem for TextByte {
+    fn from(x: u64) -> Self {
+        TextByte(x as u8)
+    }
+}
+
+/// Random text: ASCII, two-, three- and four-byte characters, and newlines.
+fn random_text(rng: &mut Rng, chars: usize) -> String {
+    let pool = ['a', 'b', ' ', '\n', 'é', 'ß', 'λ', '中', '文', '€', '𝄞', '😀'];
+    (0..chars).map(|_| pool[rng.below(pool.len())]).collect()
+}
+
+fn text_agrees(t: &Sequence<TextByte>, s: &str) {
+    assert_eq!(t.to_text().as_deref(), Some(s));
+    let chars: Vec<char> = s.chars().collect();
+    assert_eq!(t.chars(), chars.len() as u64);
+    assert_eq!(t.measures()[1], s.matches('\n').count() as u64);
+    let starts: Vec<usize> = s.char_indices().map(|(i, _)| i).collect();
+    let step = (chars.len() / 50).max(1);
+    for k in (0..chars.len()).step_by(step) {
+        assert_eq!(t.char_start(k as u64), Some(starts[k]), "start of char {k}");
+        assert_eq!(t.char_at(k as u64), Some(chars[k]), "char {k}");
+        assert_eq!(t.prefix(0, starts[k]), k as u64, "chars before byte {}", starts[k]);
+    }
+    assert_eq!(t.char_start(chars.len() as u64), Some(s.len()));
+    assert_eq!(t.char_at(chars.len() as u64), None);
+    // The n-th newline, through the second measure.
+    if let Some((i, _)) = s.match_indices('\n').nth(3) {
+        assert_eq!(t.locate(1, 3), Some(i));
+    }
+    let bytes: Vec<TextByte> = s.bytes().map(TextByte).collect();
+    assert_eq!(t.identity(), reference::identity(&bytes), "identity");
+    t.check_invariants().unwrap();
+}
+
+#[test]
+fn text_counts_characters_and_lines() {
+    let mut rng = Rng(31);
+    for chars in [0, 1, 10, 300, 5_000, 60_000, 400_000] {
+        let s = random_text(&mut rng, chars);
+        text_agrees(&Sequence::text(&s), &s);
+    }
+}
+
+#[test]
+fn text_edits_keep_counts_and_shape() {
+    let mut rng = Rng(32);
+    let mut s = random_text(&mut rng, 80_000);
+    let mut t = Sequence::text(&s);
+    for step in 0..60 {
+        let n = s.chars().count() as u64;
+        let a = rng.below(n as usize + 1) as u64;
+        let b = (a + rng.below(50) as u64).min(n);
+        let count = rng.below(40);
+        let new = random_text(&mut rng, count);
+        // Replace characters a..b: by byte positions, from the counts.
+        let (x, y) = (t.char_start(a).unwrap(), t.char_start(b).unwrap());
+        t = t.splice(x..y, new.bytes().map(TextByte));
+        s.replace_range(x..y, &new);
+        if step % 10 == 0 {
+            text_agrees(&t, &s);
+        }
+        assert_eq!(t.chars(), s.chars().count() as u64, "step {step}");
+    }
+    text_agrees(&t, &s);
+    let sliced = t.char_slice(100..2_000).unwrap();
+    let expect: String = s.chars().skip(100).take(1_900).collect();
+    text_agrees(&sliced, &expect);
+}
+
+#[test]
+fn text_and_bytes_differ() {
+    // The same bytes as text and as u8 are different sequences.
+    let t = Sequence::text("hello");
+    let b: Sequence<u8> = "hello".bytes().collect();
+    assert_ne!(t.identity(), b.identity());
 }

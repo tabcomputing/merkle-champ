@@ -209,6 +209,17 @@ pub trait Identify {
             item.identify(sink);
         }
     }
+
+    /// How many quantities a [`Sequence`] of this type sums per child in its
+    /// branches, beyond the element count (FORMAT.md, section 10.4): a
+    /// chunk's byte length, or a text byte's code points and newlines. With
+    /// them a stored branch is enough to find the element at a running total.
+    /// None by default.
+    const MEASURES: usize = 0;
+
+    /// Adds this element's quantities to `sums`, which has
+    /// [`MEASURES`](Self::MEASURES) entries.
+    fn measure(&self, _sums: &mut [u64]) {}
 }
 
 impl Identify for str {
