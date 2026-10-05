@@ -173,6 +173,8 @@ fn main() {
 
 /// Bytes, packed 1,024 to a leaf, against a `Vec<u8>`, whose content
 /// identity is a SHA-256 of the whole buffer, recomputed after any write.
+/// Both are built from an iterator, to compare like with like.
+#[allow(clippy::iter_cloned_collect)]
 fn bytes() {
     let n = 1_000_000usize;
     println!("\n## {n} bytes\n");

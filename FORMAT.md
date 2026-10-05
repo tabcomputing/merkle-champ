@@ -238,3 +238,117 @@ its element type: there is one empty sequence.
 A nested vector encodes, through `Identify`, as the tag `v`, a `u64` length
 32 and its identity, as a nested map is `m` (section 5). Storing vectors (as
 section 9 stores maps) is not yet specified.
+
+## 11. Packs
+
+A pack carries a set of stored objects as one immutable byte string. An
+object is anything whose identity is the SHA-256 of its stored bytes: a map
+or set node (section 9), a vector node, a blob, or another system's object,
+such as March's compiled code. The `pack` module reads and writes packs and
+does no I/O: fetching and publishing them belong to the caller.
+
+### 11.1 Blobs
+
+A blob is opaque content. It is stored as the domain string followed by the
+content, and its identity is the SHA-256 of that:
+
+```
+blob = "merkle-champ/blob/v1" || content
+```
+
+A value refers to a blob by its identity (tag `#`, section 5). Packs never
+look inside a blob.
+
+### 11.2 MCHPACK2
+
+The format agreed on 2026-10-03 between transfs, Pandora and March, from
+Pandora's proposal. All integers are little-endian, and offsets count from
+the start of the pack.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 8 | magic `MCHPACK2` |
+| 8 | 4 | flags, `u32`: 0; readers reject any other value |
+| 12 | 4 | root count R, `u32` |
+| 16 | 8 | object count N, `u64` |
+| 24 | 32R | the roots, unique, in the writer's order |
+| 24 + 32R | 48N | the index: per object, identity (32), offset (`u64`), length (`u64`) |
+| 24 + 32R + 48N | | the objects' bytes, in canonical order |
+
+- **The index** has one entry per object, in strictly increasing identity
+  order, so a reader finds an object by binary search.
+- **Every root** is an object in the pack.
+- **The data area** holds exactly the objects, each once, contiguous, in the
+  canonical order below, and ends where the pack ends.
+
+**References.** The references of an object `o` are the other objects in the
+pack whose identity appears as 32 consecutive bytes anywhere in `o`'s bytes,
+in order of first appearance, each once. A blob has no references. Nothing
+about the objects' kinds is needed, so the rule finds references wherever an
+object keeps them:
+- a branch's children;
+- a nested map's root inside an entry (tag `m`);
+- a blob named by an `Identity` value (tag `#`);
+- a callee's identity inside March's compiled code, stored raw after an
+  opcode.
+
+Identities of objects outside the pack are ignored: in a delta pack they are
+in the base it extends.
+
+**Canonical order.** A depth-first preorder over references, from the roots
+in header order:
+
+```
+emitted := {}
+for r in roots: visit(r)
+visit(x):
+  if x in emitted: return
+  emit x
+  for y in references(x): visit(y)
+```
+
+Every object must be emitted; a pack with an object its roots do not reach is
+invalid. This gives:
+
+- **One pack per content.** Equal roots and objects always give byte-identical
+  packs, however the objects were produced.
+- **Lazy opening.** The first root is the first object, so a reader fetches
+  the header and index in one read, then the top of the tree.
+- **Locality.** A blob comes right after the first object that refers to it,
+  so a point read gets a leaf and its page together.
+
+**Verification.**
+- A reader that fetches objects one by one, by the ranges in the index,
+  checks each object's SHA-256 against its index identity.
+- A full reader also recomputes the canonical order and checks that the
+  offsets follow it with no gaps, no unreachable objects and no trailing
+  bytes, so a valid pack is the only encoding of its roots and objects.
+
+A chance match of an identity inside unrelated bytes has probability 2^-256
+per position, and even then it only changes the order, the same way for
+writer and reader.
+
+**Golden pack** (`tests/pack.rs`). Four objects:
+- `"example/root/v1" || id(other) || id(leaf)`, the one root;
+- `other` = `"example/leaf/v1c"`;
+- `leaf` = `"example/leaf/v1" || id(page)`;
+- `page` = `blob("page")`.
+
+Their data order is root, other, leaf, page. The pack is 414 bytes, and its
+SHA-256 is
+`2930478cf38da08f57e5c04ee04bcb47206ac28a83a2c54c963a5484e9d2b9d0`.
+
+### 11.3 MCHPACK1
+
+transfs's first format, still read and written. Integers are big-endian.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 8 | magic `MCHPACK1` |
+| 8 | 4 | object count N, `u32` |
+| 12 | 8 | index offset, `u64` |
+| 20 | | the objects' bytes, in identity order |
+| index offset | 48N | per object, identity (32), offset (`u64`), length (`u64`), by identity |
+
+It has no roots and no canonical order beyond identity order, so it is
+deterministic but cannot be opened lazily from its first bytes.

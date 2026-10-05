@@ -20,10 +20,11 @@
 //! the crate root from the [`map`] and [`set`] modules.
 //!
 //! [`Vector`] is the companion sequence: a persistent vector trie whose shape
-//! depends only on its length, with the same cached identities (the
-//! [`vector`] module). Values have one encoding ([`Identify`]) in maps, sets
-//! and vectors, and each can nest in the others. The [`pack`] module reads and
-//! writes indexed packs of stored nodes.
+//! depends only on its length and element type, with the same cached
+//! identities (the [`vector`] module). Values have one encoding ([`Identify`])
+//! in maps, sets and vectors, and each can nest in the others. The [`pack`]
+//! module reads and writes packs of stored objects: MCHPACK2, canonical and
+//! lazily readable, and transfs's MCHPACK1.
 //!
 //! ```
 //! use merkle_champ::{ChampMap, ChampSet};
