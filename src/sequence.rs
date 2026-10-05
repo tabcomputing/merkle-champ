@@ -2,17 +2,25 @@
 //! edits anywhere stay local: a content-defined chunked tree, known elsewhere
 //! as a prolly tree (Noms, Dolt).
 //!
-//! **Prototype** (2026-10-05), to compare with [`Vector`](crate::Vector),
-//! whose fixed leaf boundaries make an insert in the middle shift, and so
-//! rewrite, every leaf after it. The format below is not yet in FORMAT.md
-//! and may change.
+//! It replaced a dense vector trie (Bagwell's, as in Clojure), whose leaves
+//! ended at fixed positions, so an insert in the middle shifted, and
+//! rewrote, every leaf after it. The format is FORMAT.md section 10.
+//!
+//! ```
+//! use merkle_champ::Sequence;
+//!
+//! let s: Sequence<u64> = (0..100_000).collect();
+//! let t = s.insert(50_000, 7);           // s is unchanged
+//! assert_eq!(t.get(50_000), Some(&7));
+//! assert_eq!(t.remove(50_000).identity(), s.identity());
+//! ```
 //!
 //! - **Leaves are cut by content.** A rolling hash runs over the elements'
 //!   fingerprints, `h = (h << 1) + f(e)`, so each element falls out of it 64
 //!   elements later. A leaf ends after an element where the top bits of `h`
 //!   are zero, once it holds a quarter of its target size, or at four times
 //!   its target. The target is 32 elements, or 1 KB of packed fixed-width
-//!   numbers, as for `Vector`.
+//!   numbers: 1,024 `u8`, 128 `u64`.
 //! - **Branches are cut by the same hash.** A leaf end whose hash has 5 more
 //!   zero bits also ends a level-1 branch, 10 more a level-2 branch, and so
 //!   on: an expected fanout of 32. A branch holds 2 to 128 children. So the
@@ -87,14 +95,35 @@ impl Sink for Word {
     }
 }
 
+/// The fingerprint of a fixed-width number's bits.
+const fn word_print(w: u64) -> u64 {
+    let mut h = w ^ 0x9e37_79b9_7f4a_7c15;
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    (h ^ (h >> 33)) | 1
+}
+
+/// Byte fingerprints, computed once.
+const BYTE_PRINTS: [u64; 256] = {
+    let mut t = [0u64; 256];
+    let mut i = 0;
+    while i < 256 {
+        t[i] = word_print(i as u64);
+        i += 1;
+    }
+    t
+};
+
 /// A 64-bit fingerprint of an element: of a fixed-width number's bits, or of
 /// any other element's encoding. Odd, so a run of equal elements cannot
 /// drive the rolling hash to 0.
 fn fingerprint<T: Identify>(item: &T) -> u64 {
-    if T::PACKED.is_some() {
+    if let Some((_, width)) = T::PACKED {
         let mut w = Word(0);
         T::pack(std::slice::from_ref(item), &mut w);
-        return mix64(w.0 ^ 0x9e37_79b9_7f4a_7c15) | 1;
+        return if width == 1 { BYTE_PRINTS[w.0 as usize] } else { word_print(w.0) };
     }
     let mut f = Fnv(0xcbf2_9ce4_8422_2325);
     item.identify(&mut f);
@@ -204,14 +233,14 @@ fn node_identity<T: Identify>(node: &Node<T>) -> Identity {
             let mut h = Sha256::new();
             match T::PACKED {
                 None => {
-                    Digest::update(&mut h, b"merkle-champ/sequence/leaf/v0");
+                    Digest::update(&mut h, b"merkle-champ/sequence/leaf/v1");
                     Digest::update(&mut h, (items.len() as u16).to_le_bytes());
                     for item in items {
                         item.identify(&mut h);
                     }
                 }
                 Some((tag, width)) => {
-                    Digest::update(&mut h, b"merkle-champ/sequence/packed-leaf/v0");
+                    Digest::update(&mut h, b"merkle-champ/sequence/packed-leaf/v1");
                     Digest::update(&mut h, [tag, width]);
                     Digest::update(&mut h, (items.len() as u16).to_le_bytes());
                     T::pack(items, &mut h);
@@ -225,7 +254,7 @@ fn node_identity<T: Identify>(node: &Node<T>) -> Identity {
             ..
         } => *identity.get_or_init(|| {
             let mut h = Sha256::new();
-            Digest::update(&mut h, b"merkle-champ/sequence/branch/v0");
+            Digest::update(&mut h, b"merkle-champ/sequence/branch/v1");
             Digest::update(&mut h, (children.len() as u16).to_le_bytes());
             for child in children {
                 Digest::update(&mut h, (child.len() as u64).to_le_bytes());
@@ -672,7 +701,7 @@ impl<T: Clone + Identify> Sequence<T> {
     /// The sequence's SHA-256 identity. Node identities are cached.
     pub fn identity(&self) -> Identity {
         let mut h = Sha256::new();
-        Digest::update(&mut h, b"merkle-champ/sequence/v0");
+        Digest::update(&mut h, b"merkle-champ/sequence/v1");
         Digest::update(&mut h, (self.len() as u64).to_le_bytes());
         if let Some(root) = &self.root {
             Digest::update(&mut h, node_identity(root));
@@ -756,16 +785,52 @@ fn build_up_from<T>(mut nodes: Vec<Arc<Node<T>>>, mut level: u8) -> Option<Arc<N
     nodes.pop()
 }
 
+/// Builds a sequence from elements in order, one at a time, in amortized
+/// constant time each; collecting an iterator uses it.
+pub struct Builder<T> {
+    chunker: Chunker<T>,
+}
+
+impl<T: Clone + Identify> Default for Builder<T> {
+    fn default() -> Self {
+        Builder {
+            chunker: Chunker::new(),
+        }
+    }
+}
+
+impl<T: Clone + Identify> Builder<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, item: T) {
+        self.chunker.push(item);
+    }
+
+    pub fn build(mut self) -> Sequence<T> {
+        self.chunker.finish();
+        Sequence {
+            root: build_up(self.chunker.out),
+        }
+    }
+}
+
 impl<T: Clone + Identify> FromIterator<T> for Sequence<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        let mut chunker = Chunker::new();
+        let mut b = Builder::new();
         for item in iter {
-            chunker.push(item);
+            b.push(item);
         }
-        chunker.finish();
-        Sequence {
-            root: build_up(chunker.out),
-        }
+        b.build()
+    }
+}
+
+impl<T: Clone + Identify> Identify for Sequence<T> {
+    /// Lets sequences nest in maps and sequences: a nested sequence
+    /// contributes its own (cached) identity, with the tag `v`.
+    fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
+        crate::write_tagged(sink, b'v', &self.identity());
     }
 }
 

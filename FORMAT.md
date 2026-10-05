@@ -91,7 +91,7 @@ differ, as do NaNs with different payloads.
 | `[u8; 32]` (an identity) | `#` | 32 bytes |
 | nested `ChampMap` | `m` | the nested map's 32-byte identity |
 | nested `ChampSet` | `t` | the nested set's 32-byte identity |
-| nested `Vector` | `v` | the nested vector's 32-byte identity (section 10) |
+| nested `Sequence` | `v` | the nested sequence's 32-byte identity (section 10) |
 | `()` | `0` | nothing (no length) |
 
 User implementations must keep the same properties: injective (equal values
@@ -169,81 +169,135 @@ above it. It rejects, at minimum:
 These checks make every loaded map canonical, so a loaded map behaves like
 one built in memory, whatever bytes were supplied.
 
-## 10. Vectors
+## 10. Sequences
 
-`Vector` has its own identity format, version 1, in its own domains, so a
-vector's identity can never equal a map's. `tests/vector.rs` checks the
-implementation against an independent computation of this section.
+`Sequence` has its own identity format, version 1, in its own domains. Its
+shape depends only on its contents: leaves and branches end where a rolling
+hash over the elements says, so equal contents give the same tree however
+they were made, and an edit anywhere changes only the nodes near it.
+`tests/sequence.rs` checks the implementation against an independent
+computation of this section, and the golden identities in 10.6 were also
+recomputed separately in Python.
 
-### 10.1 Canonical shape
+### 10.1 Element fingerprints
 
-A leaf holds `W` elements, fixed by the element type:
+`mix64` is MurmurHash3's 64-bit finalizer: `h ^= h >> 33; h *= 0xff51afd7ed558ccd;
+h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53; h ^= h >> 33`, multiplications modulo
+2^64.
 
-- **Packed** element types, the fixed-width numbers of section 5, fill 1,024
-  bytes: `W = 1024 / width`, so 1,024 `u8`, 512 `u16`, 256 `u32` or `f32`,
-  128 `u64`, `i64` or `f64`.
-- **Every other** element type has `W = 32`.
+- **Fixed-width numbers** (the packed types of section 5): `w` is the
+  element's little-endian bytes as an unsigned 64-bit integer, zero-extended,
+  and `print = mix64(w ^ 0x9e3779b97f4a7c15) | 1`.
+- **Every other type:** `print = mix64(f) | 1`, where `f` is FNV-1a 64 (offset
+  basis `0xcbf29ce484222325`, prime `0x100000001b3`) over the element's
+  encoding (section 5).
 
-A vector of `len` elements is split by its length alone:
+A fingerprint is odd, so a run of equal elements cannot drive the rolling
+hash to zero.
 
-- **The tail** holds the last elements: indexes `tailoff` to `len - 1`, where
-  `tailoff = ((len - 1) / W) * W` for `len > 0`, and `tailoff = 0` for the
-  empty vector. A non-empty vector's tail holds 1 to `W` elements.
-- **The tree** holds the first `tailoff` elements, a multiple of `W`, and is
-  absent when `tailoff` is 0. Its leaves hold exactly `W` elements each, in
-  order. Above them are `h ≥ 1` levels of branches; a branch holds 1 to 32
-  children, in order, and every branch except those on the rightmost path is
-  full. `h` is the smallest value with `W × 32^h ≥ tailoff`.
+### 10.2 Leaves
 
-The shape therefore depends only on `len` and the element type, never on how
-the vector was built.
+A leaf targets `W` elements: 32, or for packed types 1,024 bytes of them
+(`W = 1024 / width`: 1,024 `u8`, 128 `u64` or `f64`). It holds at least
+`W / 4` and at most `4W`, except that the last leaf may be shorter. Let
+`b = log2 W`.
 
-### 10.2 Node identity
+The rolling hash runs over the whole sequence, regardless of where leaves
+end: `h(-1) = 0` and `h(i) = (h(i - 1) << 1) + print(e(i))`, modulo 2^64. An
+element's influence shifts out of it after 64 more elements. The **cut
+level** after element `i` is -1 if `h(i)` has fewer than `b` leading zero
+bits, and otherwise `floor((zeros - b) / 5)`.
 
-Elements are encoded with `Identify` (section 5). All integers are
-little-endian.
+Scanning from the start, a leaf ends after element `i` when, counting the
+elements of the current leaf including `i`:
+
+- the count is at least `W / 4` and the cut level is at least 0, or
+- the count is `4W`, or
+- `i` is the last element.
+
+A leaf's **end level** is the cut level after its last element.
+
+### 10.3 Branches
+
+Level 1 groups the leaves into branches, level 2 groups level-1 branches,
+and so on. At level `L`, a branch ends after a child when, counting the
+branch's children including it:
+
+- the count is at least 2 and the child's end level is at least `L`, or
+- the count is 128, or
+- the child is the last node of the level.
+
+A branch's end level is its last child's. The **root** is the only node of
+the first level with one node: a single leaf, or a branch. Since every
+branch but the last of its level has at least two children, the height is
+at most logarithmic in the number of leaves. Each level needs 5 more zero
+bits than the one below, so a branch has 32 children on average.
+
+### 10.4 Node identity
+
+All integers are little-endian.
 
 ```
-leaf   = SHA-256( "merkle-champ/vector/leaf/v1"   || count (u8) || Identify(e) for each element in order )
-packed = SHA-256( "merkle-champ/vector/packed-leaf/v1" || tag (u8) || width (u8) || count (u16)
-                  || each element's bytes in order )
-branch = SHA-256( "merkle-champ/vector/branch/v1" || count (u8) || identity(child) for each child in order )
+leaf   = SHA-256( "merkle-champ/sequence/leaf/v1" || count (u16) || Identify(e) for each element )
+packed = SHA-256( "merkle-champ/sequence/packed-leaf/v1" || tag (u8) || width (u8) || count (u16)
+                  || each element's little-endian bytes )
+branch = SHA-256( "merkle-champ/sequence/branch/v1" || count (u16)
+                  || for each child: its length in elements (u64) || identity(child) )
 ```
 
-`count` is the number of elements (leaf) or children (branch), 1 to `W` or 32
-(0 for the empty vector's tail). A leaf of packed elements is a `packed`
-leaf: `tag` and `width` are the element type's tag and byte width from
-section 5 (`u` and 8 for `u64`), and each element contributes its
-little-endian bytes alone, without a tag or length, since the leaf's header
-gives both. Packing hashes only the elements' bytes, 8 of the 17 an encoded
-`u64` takes and 1 of the 10 for a `u8`, and fills leaves of 1 KB, which keeps
-a byte string's node overhead small.
+A leaf of packed elements is a `packed` leaf, with the type's tag and width
+from section 5. A branch records its children's lengths, so a stored branch
+is enough to find which child holds the element at an index.
 
-### 10.3 Vector identity
+### 10.5 Sequence identity
 
 ```
-vector = SHA-256( "merkle-champ/vector/v1" || len (u64)
-               || identity(tree root)   if tailoff > 0
-               || identity(tail leaf)   if len > 0 )
+sequence = SHA-256( "merkle-champ/sequence/v1" || len (u64) || identity(root) if len > 0 )
 ```
 
-Given `len` and the element type, which parts are present and where the tail
-begins are fixed, so the encoding is unambiguous. The element type is in the
-leaves, so vectors of the same numbers in different types differ. The empty
-vector's identity is `SHA-256("merkle-champ/vector/v1" || 0u64)`, whatever
-its element type: there is one empty sequence.
+The element type is in the leaves, so sequences of the same numbers in
+different types differ. The empty sequence has one identity, whatever its
+element type.
 
-### 10.4 Nesting and storage
+### 10.6 Golden identities
 
-A nested vector encodes, through `Identify`, as the tag `v`, a `u64` length
-32 and its identity, as a nested map is `m` (section 5). Storing vectors (as
-section 9 stores maps) is not yet specified.
+| Contents | Identity |
+|---|---|
+| `u64` 0 to 999 | `7a25cee465767ef587d2a0dd984ccf06fb5ec95d94504665282822413c972970` |
+| `u8`, element `i` = `7i mod 256`, 5,000 of them | `dba099dab8dd20cde67d061f0558ebf40bfd1925a7ed03259d80c55bab9d8ec0` |
+| strings `"item 0"` to `"item 99"` | `19dc2f35f57068d900061e75043868be820242dd773aa5057cae757db6e18266` |
+| empty | `06b6c643f3db9aaa0a211a969915be4d471aa54a0f3af8202570dc23ac0a0b20` |
+
+### 10.7 Edits (informative)
+
+Every edit is a join: the elements before one point, new elements, and the
+elements after another point, of the same sequence or another. At each
+level, re-chunking starts where the node holding the first change starts,
+since every cut before it depends only on what precedes it. It stops at the
+first new cut that falls where an old node ended, past the rolling hash's
+window at the leaves: from there the old nodes are the new ones. An insert in
+a million elements rewrites three or four nodes.
+
+The exception is a long run of equal elements, or of a short repeating
+pattern. In a run the rolling hash is the same at every position, so the run
+is cut by count, either at every chance or only at the maximum, and an edit
+inside it moves every cut after it in the run. Re-chunking then goes to the
+end of the run. The result is still canonical, and the run's leaves are equal
+to each other, so a store keeps one copy; only the work is longer.
+
+### 10.8 Nesting and storage
+
+A nested sequence encodes, through `Identify`, as the tag `v`, a `u64`
+length 32 and its identity, as a nested map is `m` (section 5). Its nodes
+are stored as their identity preimages, and packs (section 11) find a
+branch's children by their identities in its bytes. Loading a stored
+sequence is not yet provided.
 
 ## 11. Packs
 
 A pack carries a set of stored objects as one immutable byte string. An
 object is anything whose identity is the SHA-256 of its stored bytes: a map
-or set node (section 9), a vector node, a blob, or another system's object,
+or set node (section 9), a sequence node, a blob, or another system's object,
 such as March's compiled code. The `pack` module reads and writes packs and
 does no I/O: fetching and publishing them belong to the caller.
 

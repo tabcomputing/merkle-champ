@@ -2,14 +2,20 @@
 
 ## 0.2.0 (unreleased)
 
-The crate gains a persistent vector, `Vector` (the `vector` module), and the
-pack format that was the separate `merkle-champ-pack` crate (the `pack`
-module). The vector is a 32-way trie whose shape depends only on its length
-and element type, with cached SHA-256 identities (FORMAT.md, section 10), a
-`Builder` that fills leaves in place, and nesting with maps and sets through
-`Identify` (tag `v`). Fixed-width numbers are packed 1 KB to a leaf and hashed
-as their bytes (FORMAT.md, section 10.2), so `Vector<u8>` serves as a
-persistent byte string.
+The crate gains a persistent sequence, `Sequence` (the `sequence` module),
+and the pack format that was the separate `merkle-champ-pack` crate (the
+`pack` module). The sequence is a content-defined tree: leaves and branches
+end where a rolling hash over the elements says (FORMAT.md, section 10), so
+its shape depends only on its contents, and every edit (insert, remove,
+update, splice, concat, slice) re-chunks only near the change and reuses the
+rest. Identities are cached SHA-256, a `Builder` appends in constant time,
+and sequences nest with maps and sets through `Identify` (tag `v`).
+Fixed-width numbers are packed about 1 KB to a leaf and hashed as their
+bytes, so `Sequence<u8>` serves as a persistent byte string.
+
+A dense vector trie, `Vector`, came first in this release cycle and was
+replaced before release: its leaves ended at fixed positions, so an insert in
+the middle rewrote every leaf after it, which defeats sharing in a store.
 
 Packs gain MCHPACK2 (`pack::v2`, FORMAT.md section 11.2), the format agreed
 with transfs and Pandora: little-endian, the index right after the header,
@@ -20,11 +26,11 @@ verifies, so equal contents give byte-identical packs. Blobs
 nodes. `pack::v2::Index` reads objects by range without I/O. MCHPACK1 moves
 to `pack::v1`, and `pack::encode` and `pack::decode` remain MCHPACK1.
 
-`Identify` gains `PACKED` and `pack`, with defaults, for vectors; existing
+`Identify` gains `PACKED` and `pack`, with defaults, for sequences; existing
 implementations need no change. It is now implemented for `u8`, `u16`,
-`u32`, `i8`, `i16`, `i32`, `f32` and `f64` (tags `u`, `i`, `f`). Vector
-operations require `T: Identify`, since the leaf width depends on the element
-type.
+`u32`, `i8`, `i16`, `i32`, `f32` and `f64` (tags `u`, `i`, `f`). Sequence
+operations require `T: Clone + Identify`, since the chunking fingerprints the
+elements.
 `merkle-champ-pack` users switch to `merkle_champ::pack`; the format, MCHPACK1,
 is unchanged.
 

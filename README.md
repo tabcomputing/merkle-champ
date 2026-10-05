@@ -25,18 +25,20 @@ Maps and sets nest: in a `ChampMap<K, ChampMap<..>>` every inner map (for exampl
 per namespace level) has its own cached identity, which its parent's identity
 covers.
 
-`Vector<T>` is the companion sequence: a 32-way vector trie (Bagwell's, as in
-Clojure) whose shape depends only on its length and element type, with the
-same lazily cached identities, so equal contents have equal identities and a
-write rehashes only its path. Fixed-width numbers (`u8` to `u64`, `i8` to
-`i64`, `f32`, `f64`) are packed 1 KB to a leaf, so a `Vector<u8>` is a
-compact persistent byte string; other elements go 32 to a leaf. `get` and
-`set` are effectively constant time, `push` and `pop` amortised O(1), and a
-`Builder` fills leaves in place. Against imbl's RRB `Vector` it is faster on
-every read and write measured and equal on push and pop; an identity after
-one write at 1M elements takes about 3 µs, against 11 ms to rehash every
-element ([bench-results/vector-2026-10-04.md](bench-results/vector-2026-10-04.md)).
-Values encode the same way in maps, sets and vectors, and all three nest.
+`Sequence<T>` is the companion sequence: a content-defined tree (a "prolly
+tree", as in Noms and Dolt) whose leaves and branches end where a rolling
+hash over the elements says. So its shape depends only on its contents,
+equal contents have equal identities however they were made, and an edit
+anywhere rewrites only the few nodes near it: inserting into a million
+elements takes a few microseconds and rewrites 3 or 4 nodes, which a store
+shares across versions. Insert, remove, update, splice, concat and slice all
+work this way. Fixed-width numbers (`u8` to `u64`, `i8` to `i64`, `f32`,
+`f64`) are packed about 1 KB to a leaf, so a `Sequence<u8>` is a compact
+persistent byte string; other elements go about 32 to a leaf. Against imbl's
+RRB `Vector` it is faster at building, iterating, inserting, joining and
+slicing, slower at random reads and point updates, and it has identities
+([bench-results/sequence-2026-10-05.md](bench-results/sequence-2026-10-05.md)).
+Values encode the same way in maps, sets and sequences, and all three nest.
 
 The `pack` module reads and writes packs of stored objects (FORMAT.md,
 section 11):
@@ -81,7 +83,7 @@ Keys implement `KeyHash` (deterministic 64-bit hash) and `Ord` (orders entries
 that share a full hash). Keys and values implement `Identify` for identities,
 and `Decode` to be loaded back. `Identify` is provided for strings, byte
 vectors, the fixed-width integers and floats, `()`, 32-byte identities, and
-nested maps, sets and vectors.
+nested maps, sets and sequences.
 
 ## Storing and loading
 

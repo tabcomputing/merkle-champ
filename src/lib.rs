@@ -19,10 +19,11 @@
 //! elements to `()`), with the same three properties. Both are re-exported at
 //! the crate root from the [`map`] and [`set`] modules.
 //!
-//! [`Vector`] is the companion sequence: a persistent vector trie whose shape
-//! depends only on its length and element type, with the same cached
-//! identities (the [`vector`] module). Values have one encoding ([`Identify`])
-//! in maps, sets and vectors, and each can nest in the others. The [`pack`]
+//! [`Sequence`] is the companion sequence: a persistent tree whose shape
+//! depends only on its contents, cut where a rolling hash over the elements
+//! says, so edits anywhere stay local, with the same cached identities (the
+//! [`sequence`] module). Values have one encoding ([`Identify`]) in maps, sets
+//! and sequences, and each can nest in the others. The [`pack`]
 //! module reads and writes packs of stored objects: MCHPACK2, canonical and
 //! lazily readable, and transfs's MCHPACK1.
 //!
@@ -104,13 +105,11 @@ pub mod map;
 pub mod pack;
 pub mod sequence;
 pub mod set;
-pub mod vector;
 
 pub use codec::{Decode, DecodeError, Loader, Objects, Sink, read_tagged, write_tagged};
 pub use map::{ChampMap, Change, Iter};
 pub use sequence::Sequence;
 pub use set::{ChampSet, SetChange};
-pub use vector::Vector;
 
 /// A 32-byte SHA-256 content identity.
 pub type Identity = [u8; 32];
@@ -194,10 +193,10 @@ pub trait Identify {
     /// values are stored inline and keep the default, which does nothing.
     fn save_objects(&self, _objects: &mut Objects) {}
 
-    /// How a [`Vector`] of this type fills its leaves (FORMAT.md, section
-    /// 10). `None`, the default, puts 32 elements in a leaf, each encoded with
-    /// [`identify`](Self::identify). Fixed-width numbers give their tag and
-    /// width in bytes, and fill leaves of 1 KB with their little-endian bytes.
+    /// How a [`Sequence`] of this type fills its leaves (FORMAT.md, section
+    /// 10). `None`, the default, targets 32 elements in a leaf, each encoded
+    /// with [`identify`](Self::identify). Fixed-width numbers give their tag
+    /// and width in bytes, and target 1 KB of their little-endian bytes.
     const PACKED: Option<(u8, u8)> = None;
 
     /// Writes the bytes of packed elements, in order. Called only for types
@@ -233,7 +232,7 @@ impl Identify for Vec<u8> {
     }
 }
 /// Fixed-width numbers: a tag (`u` unsigned, `i` signed, `f` floating) and
-/// their little-endian bytes, whose length gives the width. In a vector they
+/// their little-endian bytes, whose length gives the width. In a sequence they
 /// are packed.
 macro_rules! fixed_width {
     ($($t:ty => $tag:literal),* $(,)?) => {$(
