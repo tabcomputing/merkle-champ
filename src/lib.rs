@@ -102,11 +102,13 @@
 pub mod codec;
 pub mod map;
 pub mod pack;
+pub mod sequence;
 pub mod set;
 pub mod vector;
 
 pub use codec::{Decode, DecodeError, Loader, Objects, Sink, read_tagged, write_tagged};
 pub use map::{ChampMap, Change, Iter};
+pub use sequence::Sequence;
 pub use set::{ChampSet, SetChange};
 pub use vector::Vector;
 
@@ -140,7 +142,7 @@ pub fn hash_bytes(bytes: &[u8]) -> u64 {
     mix64(h ^ bytes.len() as u64)
 }
 
-fn mix64(mut h: u64) -> u64 {
+pub(crate) fn mix64(mut h: u64) -> u64 {
     h ^= h >> 33;
     h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
     h ^= h >> 33;
@@ -241,6 +243,10 @@ macro_rules! fixed_width {
             }
             const PACKED: Option<(u8, u8)> = Some(($tag, std::mem::size_of::<$t>() as u8));
             fn pack<S: Sink + ?Sized>(items: &[Self], sink: &mut S) {
+                if let [item] = items {
+                    sink.update(&item.to_le_bytes());
+                    return;
+                }
                 // A leaf at a time, through a buffer, rather than an update
                 // per element.
                 const N: usize = 1024 / std::mem::size_of::<$t>();
