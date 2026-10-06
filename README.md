@@ -40,17 +40,12 @@ slicing, slower at random reads and point updates, and it has identities
 ([bench-results/sequence-2026-10-05.md](bench-results/sequence-2026-10-05.md)).
 Values encode the same way in maps, sets and sequences, and all three nest.
 
-The `pack` module reads and writes packs of stored objects (FORMAT.md,
-section 11):
-
-- **MCHPACK2** has the index right after the header, so a reader opens a pack
-  with one read and fetches objects by range (`pack::v2::Index`, which does
-  no I/O). Objects are in a canonical order found without knowing what they
-  are, so equal contents give byte-identical packs. Blobs can share a pack
-  with nodes, each right after the first object that refers to it.
-- **MCHPACK1** is transfs's first format, still supported. `pack::encode` and
-  `pack::decode` remain MCHPACK1. (It was the separate `merkle-champ-pack`
-  crate.)
+The `pack` module reads and writes MCHPACK2, packs of stored objects
+(FORMAT.md, section 11). The index comes right after the header, so a reader
+opens a pack with one read and fetches objects by range (`pack::Index`, which
+does no I/O). Objects are in a canonical order found without knowing what
+they are, so equal contents give byte-identical packs. Blobs can share a
+pack with nodes, each right after the first object that refers to it.
 
 The identity format is specified in [FORMAT.md](FORMAT.md) and pinned by
 golden vectors. Keys and values must satisfy the consistency requirements in

@@ -411,17 +411,5 @@ Their data order is root, other, leaf, page. The pack is 414 bytes, and its
 SHA-256 is
 `2930478cf38da08f57e5c04ee04bcb47206ac28a83a2c54c963a5484e9d2b9d0`.
 
-### 11.3 MCHPACK1
-
-transfs's first format, still read and written. Integers are big-endian.
-
-| Offset | Size | Field |
-|---|---|---|
-| 0 | 8 | magic `MCHPACK1` |
-| 8 | 4 | object count N, `u32` |
-| 12 | 8 | index offset, `u64` |
-| 20 | | the objects' bytes, in identity order |
-| index offset | 48N | per object, identity (32), offset (`u64`), length (`u64`), by identity |
-
-It has no roots and no canonical order beyond identity order, so it is
-deterministic but cannot be opened lazily from its first bytes.
+MCHPACK1, transfs's first format (big-endian, data in identity order, the
+index at the end), was dropped on 2026-10-05: no stored packs needed it.

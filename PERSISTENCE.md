@@ -269,12 +269,21 @@ suggested an average of about 64 KiB. Measurements from transfs (its
 - Small chunks make a big file's chunk list long (about 2.5 million entries
   for 10 GB at 4 KiB). That is affordable only if the list is cheap to edit.
 
+transfs's default is **8 KiB** (FastCDC, 2 KiB minimum, 32 KiB maximum), with
+page-sized fixed chunks for SQLite and small files kept whole. 8 KiB keeps
+nearly all of 4 KiB's saving with half the chunks: a small stroke in an XCF
+image stores 2.8% of the file against 2.5% at 4 KiB, a long vertical stroke
+14.5% against 10.5%; 16 KiB gives 3.9% and 21.2%. On a real 307 MiB SQLite
+database, a change to two pages cost 8 KiB of chunks but 2.4 MiB of chunk
+list stored flat (about 78,000 entries), the cost a `Sequence` removes.
+
 So the chunk list is a merkle-champ `Sequence` (FORMAT.md section 10): a
 content-defined tree whose nodes end where a rolling hash says, so inserting
 chunks rewrites a few nodes per level rather than the rest of the list, and
 equal lists have equal identities. To find the chunk holding a byte offset,
-branches will carry each child's byte length as well as its element count,
-the same per-child sums March's strings need for code points and newlines.
+branches carry each child's byte length as well as its element count
+(measures, FORMAT.md section 10.4), the same per-child sums March's strings
+use for code points and newlines.
 
 ## 11. Trust and secrecy
 

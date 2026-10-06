@@ -1,8 +1,8 @@
-//! MCHPACK2 (`merkle_champ::pack::v2`, FORMAT.md section 11): round trips of
+//! MCHPACK2 (`merkle_champ::pack`, FORMAT.md section 11): round trips of
 //! real maps with blobs, the canonical order against a naive independent
 //! computation on random object graphs, lazy reads through the index, every
 //! rejection, and a golden pack.
-use merkle_champ::pack::{self, BLOB_DOMAIN, v2};
+use merkle_champ::pack::{self, BLOB_DOMAIN};
 use merkle_champ::{ChampMap, Identity, Objects};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -27,7 +27,7 @@ fn sha(bytes: &[u8]) -> Identity {
 /// The objects in a pack's data area, in order, by sorting index entries by
 /// offset.
 fn data_order(pack: &[u8]) -> Vec<Identity> {
-    let index = v2::Index::parse(pack).unwrap();
+    let index = pack::Index::parse(pack).unwrap();
     let mut entries: Vec<(u64, Identity)> =
         index.ids().map(|id| (index.locate(id).unwrap().0, *id)).collect();
     entries.sort();
@@ -127,12 +127,12 @@ fn the_order_matches_a_naive_computation() {
     for round in 0..60 {
         let (roots, map) = random_graph(&mut rng, 1 + round);
         let objects = objects_of(&map);
-        let pack = v2::encode(&roots, &objects).unwrap();
+        let pack = pack::encode(&roots, &objects).unwrap();
         assert_eq!(data_order(&pack), naive_order(&roots, &map), "round {round}");
-        let decoded = v2::decode(&pack).unwrap();
+        let decoded = pack::decode(&pack).unwrap();
         assert_eq!(decoded.roots, roots);
         assert_eq!(decoded.objects, objects);
-        assert_eq!(v2::encode(&decoded.roots, &decoded.objects).unwrap(), pack);
+        assert_eq!(pack::encode(&decoded.roots, &decoded.objects).unwrap(), pack);
     }
 }
 
@@ -158,8 +158,8 @@ fn build(names: impl Iterator<Item = u64>) -> (ChampMap<String, Pages>, Objects)
 fn maps_with_blobs_round_trip() {
     let (map, mut objects) = build(0..200);
     let root = map.save(&mut objects);
-    let pack = v2::encode(&[root], &objects).unwrap();
-    let decoded = v2::decode(&pack).unwrap();
+    let pack = pack::encode(&[root], &objects).unwrap();
+    let decoded = pack::decode(&pack).unwrap();
     assert_eq!(decoded.roots, [root]);
     let loaded = ChampMap::<String, Pages>::load(&root, &decoded.objects).unwrap();
     assert_eq!(loaded, map);
@@ -196,7 +196,7 @@ fn equal_contents_give_identical_packs() {
     let ra = a.save(&mut oa);
     let rb = b.save(&mut ob);
     assert_eq!(ra, rb);
-    assert_eq!(v2::encode(&[ra], &oa).unwrap(), v2::encode(&[rb], &ob).unwrap());
+    assert_eq!(pack::encode(&[ra], &oa).unwrap(), pack::encode(&[rb], &ob).unwrap());
 }
 
 // ------------------------------------------------------- lazy reading
@@ -205,17 +205,17 @@ fn equal_contents_give_identical_packs() {
 fn the_index_reads_objects_by_range() {
     let (map, mut objects) = build(0..50);
     let root = map.save(&mut objects);
-    let pack = v2::encode(&[root], &objects).unwrap();
+    let pack = pack::encode(&[root], &objects).unwrap();
     // One read for the header, one for the index, then any object.
-    let needed = v2::Index::needed(&pack[..24]).unwrap();
-    let index = v2::Index::parse(&pack[..needed]).unwrap();
+    let needed = pack::Index::needed(&pack[..24]).unwrap();
+    let index = pack::Index::parse(&pack[..needed]).unwrap();
     assert_eq!(index.roots(), [root]);
     assert_eq!(index.len(), objects.len());
     for (id, bytes) in objects.iter() {
         let (offset, length) = index.locate(id).unwrap();
         let fetched = &pack[offset as usize..(offset + length) as usize];
         assert_eq!(fetched, bytes);
-        assert!(v2::Index::verify(id, fetched));
+        assert!(pack::Index::verify(id, fetched));
     }
     assert_eq!(index.locate(&[0; 32]), None);
     // The root's top levels come first: the root is the first object.
@@ -241,7 +241,7 @@ fn small() -> (Vec<Identity>, Objects) {
 #[test]
 fn the_golden_pack() {
     let (roots, objects) = small();
-    let pack = v2::encode(&roots, &objects).unwrap();
+    let pack = pack::encode(&roots, &objects).unwrap();
     // The root, then what it refers to in order of appearance: the other
     // leaf, the leaf, and the leaf's page right after it.
     let names: Vec<&[u8]> = data_order(&pack)
@@ -304,8 +304,8 @@ fn hex(bytes: &[u8]) -> String {
 #[test]
 fn bad_packs_are_rejected() {
     let (roots, objects) = small();
-    let pack = v2::encode(&roots, &objects).unwrap();
-    let err = |p: &[u8]| v2::decode(p).unwrap_err().to_string();
+    let pack = pack::encode(&roots, &objects).unwrap();
+    let err = |p: &[u8]| pack::decode(p).unwrap_err().to_string();
 
     // A changed byte in an object.
     let mut p = pack.clone();
@@ -326,7 +326,7 @@ fn bad_packs_are_rejected() {
     assert_eq!(err(&p), "unused bytes in pack data area");
     // Data in identity order instead of canonical order: same objects, same
     // index layout otherwise.
-    let needed = v2::Index::needed(&pack).unwrap();
+    let needed = pack::Index::needed(&pack).unwrap();
     let mut p = pack[..needed].to_vec();
     let mut offset = needed as u64;
     for (k, (_, bytes)) in objects.iter().enumerate() {
@@ -343,15 +343,15 @@ fn bad_packs_are_rejected() {
     let (root, mut more) = (roots[0], objects.clone());
     more.insert(b"unreferenced".to_vec());
     assert_eq!(
-        v2::encode(&[root], &more).unwrap_err().to_string(),
+        pack::encode(&[root], &more).unwrap_err().to_string(),
         "pack object not reachable from its roots"
     );
     assert_eq!(
-        v2::encode(&[root, root], &objects).unwrap_err().to_string(),
+        pack::encode(&[root, root], &objects).unwrap_err().to_string(),
         "pack roots must be unique"
     );
     assert_eq!(
-        v2::encode(&[[7; 32]], &objects).unwrap_err().to_string(),
+        pack::encode(&[[7; 32]], &objects).unwrap_err().to_string(),
         "pack root is not in the pack"
     );
     // A blob's bytes are not scanned: an object only a blob mentions is
@@ -361,24 +361,22 @@ fn bad_packs_are_rejected() {
     let mut page = BLOB_DOMAIN.to_vec();
     page.extend_from_slice(&hidden);
     let page = lone.insert(page);
-    assert!(v2::encode(&[root, page], &lone).is_err());
-    assert!(v2::encode(&[root, page, hidden], &lone).is_ok());
+    assert!(pack::encode(&[root, page], &lone).is_err());
+    assert!(pack::encode(&[root, page, hidden], &lone).is_ok());
 }
 
 #[test]
 fn the_empty_pack() {
-    let pack = v2::encode(&[], &Objects::new()).unwrap();
+    let pack = pack::encode(&[], &Objects::new()).unwrap();
     assert_eq!(pack.len(), 24);
-    let decoded = v2::decode(&pack).unwrap();
+    let decoded = pack::decode(&pack).unwrap();
     assert!(decoded.roots.is_empty() && decoded.objects.is_empty());
 }
 
 #[test]
-fn mchpack1_is_unchanged() {
-    let bytes = b"node".to_vec();
-    let id = sha(&bytes);
-    let p = pack::encode(&[(id, bytes.clone())]).unwrap();
-    assert_eq!(&p[..8], b"MCHPACK1");
-    assert_eq!(pack::decode(&p).unwrap(), [(id, bytes)]);
-    assert!(v2::decode(&p).is_err());
+fn other_bytes_are_not_packs() {
+    // The MCHPACK1 header, from transfs's first format, is not read.
+    let mut p = b"MCHPACK1".to_vec();
+    p.extend([0; 16]);
+    assert!(pack::decode(&p).is_err());
 }

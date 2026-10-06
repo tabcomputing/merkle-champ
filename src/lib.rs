@@ -24,8 +24,8 @@
 //! says, so edits anywhere stay local, with the same cached identities (the
 //! [`sequence`] module). Values have one encoding ([`Identify`]) in maps, sets
 //! and sequences, and each can nest in the others. The [`pack`]
-//! module reads and writes packs of stored objects: MCHPACK2, canonical and
-//! lazily readable, and transfs's MCHPACK1.
+//! module reads and writes MCHPACK2, canonical and lazily readable packs of
+//! stored objects.
 //!
 //! ```
 //! use merkle_champ::{ChampMap, ChampSet};

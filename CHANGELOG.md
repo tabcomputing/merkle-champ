@@ -17,22 +17,24 @@ A dense vector trie, `Vector`, came first in this release cycle and was
 replaced before release: its leaves ended at fixed positions, so an insert in
 the middle rewrote every leaf after it, which defeats sharing in a store.
 
-Packs gain MCHPACK2 (`pack::v2`, FORMAT.md section 11.2), the format agreed
-with transfs and Pandora: little-endian, the index right after the header,
-and object data in a canonical, type-free order (a preorder over the
-identities each object contains, from the roots), which every full reader
-verifies, so equal contents give byte-identical packs. Blobs
+Packs are MCHPACK2 (`pack`, FORMAT.md section 11), the format agreed with
+transfs and Pandora: little-endian, the index right after the header, and
+object data in a canonical, type-free order (a preorder over the identities
+each object contains, from the roots), which every full reader verifies, so
+equal contents give byte-identical packs. Blobs
 (`"merkle-champ/blob/v1" || content`, `pack::blob`) can share a pack with
-nodes. `pack::v2::Index` reads objects by range without I/O. MCHPACK1 moves
-to `pack::v1`, and `pack::encode` and `pack::decode` remain MCHPACK1.
+nodes. `pack::Index` reads objects by range without I/O. MCHPACK1, transfs's
+first format from the `merkle-champ-pack` crate, is dropped: no stored packs
+needed it (Thomas, 2026-10-05).
 
 `Identify` gains `PACKED` and `pack`, with defaults, for sequences; existing
 implementations need no change. It is now implemented for `u8`, `u16`,
 `u32`, `i8`, `i16`, `i32`, `f32` and `f64` (tags `u`, `i`, `f`). Sequence
 operations require `T: Clone + Identify`, since the chunking fingerprints the
 elements.
-`merkle-champ-pack` users switch to `merkle_champ::pack`; the format, MCHPACK1,
-is unchanged.
+`merkle-champ-pack` users switch to `merkle_champ::pack` and to MCHPACK2:
+`pack::encode(roots, &objects)` and `pack::decode(bytes)`, which returns the
+roots and the objects.
 
 Maps can be stored as bytes and loaded back. The identity format is unchanged:
 every identity computed by 0.1 is the same in 0.2, and the golden vectors are
