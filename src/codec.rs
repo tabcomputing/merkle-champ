@@ -1,4 +1,5 @@
-//! Storing maps as bytes and reading them back (FORMAT.md, section 9).
+//! Storing maps, sets and sequences as bytes and reading them back (FORMAT.md,
+//! sections 9 and 10.8).
 //!
 //! A stored node is exactly the bytes its identity hashes, so an object's
 //! identity is the SHA-256 of its bytes and loading verifies itself. Nothing
@@ -213,6 +214,15 @@ impl<'a> Loader<'a> {
 /// stored map loads back equal to the map that was saved.
 pub trait Decode: Sized {
     fn decode(input: &mut &[u8], loader: &mut Loader<'_>) -> Result<Self, DecodeError>;
+
+    /// Reads `count` elements from `bytes`, exactly the bytes
+    /// [`Identify::pack`](crate::Identify::pack) writes for them in a
+    /// sequence's packed leaf. Called only for types whose
+    /// [`PACKED`](crate::Identify::PACKED) is set; the default rejects.
+    fn unpack(bytes: &[u8], count: usize) -> Result<Vec<Self>, DecodeError> {
+        let _ = (bytes, count);
+        Err(DecodeError::Malformed("not a packed element type"))
+    }
 }
 
 /// Takes `n` bytes from the front of `input`.
@@ -242,7 +252,8 @@ fn fixed<const N: usize>(input: &mut &[u8], tag: u8) -> Result<[u8; N], DecodeEr
         .map_err(|_| DecodeError::Malformed("wrong payload length"))
 }
 
-/// Reads a tagged 32-byte identity, as nested maps (`m`) and sets (`t`) write.
+/// Reads a tagged 32-byte identity, as nested maps (`m`), sets (`t`) and
+/// sequences (`v`) write.
 pub(crate) fn read_identity(input: &mut &[u8], tag: u8) -> Result<Identity, DecodeError> {
     fixed(input, tag)
 }
@@ -260,17 +271,32 @@ impl Decode for Vec<u8> {
     }
 }
 
-impl Decode for u64 {
-    fn decode(input: &mut &[u8], _: &mut Loader<'_>) -> Result<Self, DecodeError> {
-        Ok(u64::from_le_bytes(fixed(input, b'u')?))
-    }
+/// Fixed-width numbers: a tag and little-endian bytes of their width, or in a
+/// packed leaf just the bytes.
+macro_rules! decode_fixed_width {
+    ($($t:ty => $tag:literal),* $(,)?) => {$(
+        impl Decode for $t {
+            fn decode(input: &mut &[u8], _: &mut Loader<'_>) -> Result<Self, DecodeError> {
+                Ok(<$t>::from_le_bytes(fixed(input, $tag)?))
+            }
+            fn unpack(bytes: &[u8], count: usize) -> Result<Vec<Self>, DecodeError> {
+                const WIDTH: usize = std::mem::size_of::<$t>();
+                if Some(bytes.len()) != count.checked_mul(WIDTH) {
+                    return Err(DecodeError::Malformed("packed bytes of the wrong length"));
+                }
+                Ok(bytes
+                    .chunks_exact(WIDTH)
+                    .map(|b| <$t>::from_le_bytes(b.try_into().expect("one element's bytes")))
+                    .collect())
+            }
+        }
+    )*};
 }
-
-impl Decode for i64 {
-    fn decode(input: &mut &[u8], _: &mut Loader<'_>) -> Result<Self, DecodeError> {
-        Ok(i64::from_le_bytes(fixed(input, b'i')?))
-    }
-}
+decode_fixed_width!(
+    u8 => b'u', u16 => b'u', u32 => b'u', u64 => b'u',
+    i8 => b'i', i16 => b'i', i32 => b'i', i64 => b'i',
+    f32 => b'f', f64 => b'f',
+);
 
 impl Decode for Identity {
     fn decode(input: &mut &[u8], _: &mut Loader<'_>) -> Result<Self, DecodeError> {

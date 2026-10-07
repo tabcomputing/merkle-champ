@@ -99,7 +99,30 @@ let loaded: ChampMap<String, u64> = ChampMap::load(&root, &objects).unwrap();
 assert_eq!(loaded, v1);
 ```
 
-Nested maps and sets are stored as their own trees and shared on load. The
+Sequences store and load the same way, as their nodes and a header that
+records the length and root. Loading checks that the tree is the one the
+elements build, so an edit to a loaded sequence gives what it would have
+given before saving:
+
+```rust
+use merkle_champ::{Objects, Sequence};
+
+let v1: Sequence<u64> = (0..100_000).collect();
+let mut objects = Objects::new();
+let id = v1.save(&mut objects);                   // the sequence's identity
+v1.insert(50_000, 7).save(&mut objects);          // adds a few nodes
+let loaded: Sequence<u64> = Sequence::load(&id, &objects).unwrap();
+assert_eq!(loaded.insert(50_000, 7).identity(), v1.insert(50_000, 7).identity());
+```
+
+A chunk list of 78,000 references (transfs's case: a 32-byte identity and a
+length each, measured by length) saves in about 4 ms once identities are
+computed, as 2,127 objects and 4 MB, and loads in about 7 ms; a new version
+with one chunk inserted adds 6 objects in 40 µs (local release build, not a
+benchmark).
+
+Nested maps, sets and sequences are stored as their own trees and shared on
+load. The
 crate performs no I/O: moving objects to disk or across a network is up to the
 caller. PERSISTENCE.md discusses a layer built on top for stores, packs, sync
 and history.

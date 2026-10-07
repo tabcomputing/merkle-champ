@@ -35,10 +35,18 @@
 //!   few nodes per level.
 //! - **Branches store their children's lengths,** so the element at an index
 //!   is found by descending, and a stored branch is enough to navigate.
+use crate::codec::{Decode, DecodeError, Loader, Objects, read_bytes, read_identity};
 use crate::{Identify, Identity, Sink, mix64};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
+
+const SEQUENCE_DOMAIN: &[u8] = b"merkle-champ/sequence/v1";
+const LEAF_DOMAIN: &[u8] = b"merkle-champ/sequence/leaf/v1";
+const PACKED_DOMAIN: &[u8] = b"merkle-champ/sequence/packed-leaf/v1";
+const BRANCH_DOMAIN: &[u8] = b"merkle-champ/sequence/branch/v1";
+const MEASURED_DOMAIN: &[u8] = b"merkle-champ/sequence/measured-branch/v1";
 
 /// The most measures an element type may declare.
 const MAX_MEASURES: usize = 8;
@@ -248,52 +256,62 @@ fn branch<T>(children: Vec<Arc<Node<T>>>) -> Arc<Node<T>> {
     })
 }
 
-fn node_identity<T: Identify>(node: &Node<T>) -> Identity {
+/// Writes a node's identity preimage (FORMAT.md, section 10.4): into a
+/// hasher for its identity, or into a buffer to store it, so the two cannot
+/// disagree. Children contribute their identities.
+fn write_node<T: Identify, S: Sink + ?Sized>(node: &Node<T>, sink: &mut S) {
     match node {
-        Node::Leaf {
-            items, identity, ..
-        } => *identity.get_or_init(|| {
-            let mut h = Sha256::new();
-            match T::PACKED {
-                None => {
-                    Digest::update(&mut h, b"merkle-champ/sequence/leaf/v1");
-                    Digest::update(&mut h, (items.len() as u16).to_le_bytes());
-                    for item in items {
-                        item.identify(&mut h);
-                    }
-                }
-                Some((tag, width)) => {
-                    Digest::update(&mut h, b"merkle-champ/sequence/packed-leaf/v1");
-                    Digest::update(&mut h, [tag, width]);
-                    Digest::update(&mut h, (items.len() as u16).to_le_bytes());
-                    T::pack(items, &mut h);
+        Node::Leaf { items, .. } => match T::PACKED {
+            None => {
+                sink.update(LEAF_DOMAIN);
+                sink.update(&(items.len() as u16).to_le_bytes());
+                for item in items {
+                    item.identify(sink);
                 }
             }
-            h.finalize().into()
-        }),
-        Node::Branch {
-            children,
-            identity,
-            ..
-        } => *identity.get_or_init(|| {
-            let mut h = Sha256::new();
+            Some((tag, width)) => {
+                sink.update(PACKED_DOMAIN);
+                sink.update(&[tag, width]);
+                sink.update(&(items.len() as u16).to_le_bytes());
+                T::pack(items, sink);
+            }
+        },
+        Node::Branch { children, .. } => {
             if T::MEASURES == 0 {
-                Digest::update(&mut h, b"merkle-champ/sequence/branch/v1");
-                Digest::update(&mut h, (children.len() as u16).to_le_bytes());
+                sink.update(BRANCH_DOMAIN);
+                sink.update(&(children.len() as u16).to_le_bytes());
             } else {
-                Digest::update(&mut h, b"merkle-champ/sequence/measured-branch/v1");
-                Digest::update(&mut h, (children.len() as u16).to_le_bytes());
-                Digest::update(&mut h, [T::MEASURES as u8]);
+                sink.update(MEASURED_DOMAIN);
+                sink.update(&(children.len() as u16).to_le_bytes());
+                sink.update(&[T::MEASURES as u8]);
             }
             for child in children {
-                Digest::update(&mut h, (child.len() as u64).to_le_bytes());
+                sink.update(&(child.len() as u64).to_le_bytes());
                 for s in child.sums() {
-                    Digest::update(&mut h, s.to_le_bytes());
+                    sink.update(&s.to_le_bytes());
                 }
-                Digest::update(&mut h, node_identity(child));
+                sink.update(&node_identity(child));
             }
-            h.finalize().into()
-        }),
+        }
+    }
+}
+
+fn node_identity<T: Identify>(node: &Node<T>) -> Identity {
+    let (Node::Leaf { identity, .. } | Node::Branch { identity, .. }) = node;
+    *identity.get_or_init(|| {
+        let mut h = Sha256::new();
+        write_node(node, &mut h);
+        h.finalize().into()
+    })
+}
+
+/// Writes a sequence's identity preimage (FORMAT.md, section 10.5), which is
+/// also how a saved sequence is stored.
+fn write_header<S: Sink + ?Sized>(sink: &mut S, len: usize, root: Option<Identity>) {
+    sink.update(SEQUENCE_DOMAIN);
+    sink.update(&(len as u64).to_le_bytes());
+    if let Some(root) = root {
+        sink.update(&root);
     }
 }
 
@@ -806,12 +824,24 @@ impl<T: Clone + Identify> Sequence<T> {
     /// The sequence's SHA-256 identity. Node identities are cached.
     pub fn identity(&self) -> Identity {
         let mut h = Sha256::new();
-        Digest::update(&mut h, b"merkle-champ/sequence/v1");
-        Digest::update(&mut h, (self.len() as u64).to_le_bytes());
-        if let Some(root) = &self.root {
-            Digest::update(&mut h, node_identity(root));
-        }
+        write_header(&mut h, self.len(), self.root.as_deref().map(node_identity));
         h.finalize().into()
+    }
+
+    /// Adds every node of this sequence, every separately stored object its
+    /// elements refer to (nested maps, sets and sequences), and the sequence
+    /// itself to `objects`, and returns the sequence's identity. Each is
+    /// stored as exactly the bytes its identity hashes (FORMAT.md, section
+    /// 10.8): the sequence as its length and root's identity, a node as its
+    /// preimage.
+    ///
+    /// Subtrees whose roots are already in `objects` are skipped, so saving a
+    /// new version into the same set costs only the nodes an edit rewrote.
+    pub fn save(&self, objects: &mut Objects) -> Identity {
+        let root = self.root.as_deref().map(|r| save_node(r, objects));
+        let mut bytes = Vec::new();
+        write_header(&mut bytes, self.len(), root);
+        objects.insert(bytes)
     }
 
     /// The nodes of the tree, for measuring how much two versions share.
@@ -937,6 +967,252 @@ impl<T: Clone + Identify> Identify for Sequence<T> {
     fn identify<S: Sink + ?Sized>(&self, sink: &mut S) {
         crate::write_tagged(sink, b'v', &self.identity());
     }
+
+    /// A nested sequence is stored as its own tree; the parent holds its
+    /// identity.
+    fn save_objects(&self, objects: &mut Objects) {
+        self.save(objects);
+    }
+}
+
+/// Adds `node`'s subtree to `objects`, children before parents, skipping any
+/// subtree whose root is already there. Returns the node's identity.
+fn save_node<T: Identify>(node: &Node<T>, objects: &mut Objects) -> Identity {
+    let id = node_identity(node);
+    if objects.contains(&id) {
+        return id;
+    }
+    match node {
+        Node::Leaf { items, .. } => {
+            if T::PACKED.is_none() {
+                for item in items {
+                    item.save_objects(objects);
+                }
+            }
+        }
+        Node::Branch { children, .. } => {
+            for c in children {
+                save_node(c, objects);
+            }
+        }
+    }
+    let mut bytes = Vec::new();
+    write_node(node, &mut bytes);
+    objects.insert_known(id, bytes);
+    id
+}
+
+/// The deepest tree loading accepts. A canonical tree is far shallower: its
+/// branches below the root have at least two children, except the last of
+/// each level, so its height is at most the bits in its length.
+const MAX_HEIGHT: usize = 64;
+
+/// State for loading one sequence: the rolling hash over the elements so far,
+/// which the stored bytes leave out, and the nodes already loaded.
+struct Load<T> {
+    p: Params,
+    h: u64,
+    /// Loaded nodes by identity, rolling hash before them, and whether they
+    /// end the sequence, with the rolling hash after them. A repeated subtree
+    /// (a run of equal chunks) is then loaded once; the hash is part of the
+    /// key because a node's cut levels depend on the elements before it.
+    memo: HashMap<MemoKey, (Arc<Node<T>>, u64)>,
+}
+
+/// A loaded node's identity, the rolling hash before it, and whether it ends
+/// the sequence.
+type MemoKey = (Identity, u64, bool);
+
+fn read_u16(input: &mut &[u8]) -> Result<usize, DecodeError> {
+    Ok(u16::from_le_bytes(read_bytes(input, 2)?.try_into().expect("2 bytes")) as usize)
+}
+
+fn read_u64(input: &mut &[u8]) -> Result<u64, DecodeError> {
+    Ok(u64::from_le_bytes(
+        read_bytes(input, 8)?.try_into().expect("8 bytes"),
+    ))
+}
+
+/// Loads the node `id`, the next one in element order, checking that it is
+/// where the cut rules put it (FORMAT.md, sections 10.2 and 10.3). `last`
+/// says whether it ends the sequence, which may end a node without a cut.
+fn load_node<T: Clone + Identify + Decode>(
+    id: &Identity,
+    loader: &mut Loader<'_>,
+    st: &mut Load<T>,
+    last: bool,
+    depth: usize,
+) -> Result<Arc<Node<T>>, DecodeError> {
+    use DecodeError::{Malformed, Missing, NonCanonical};
+    let key = (*id, st.h, last);
+    if let Some((node, h)) = st.memo.get(&key) {
+        st.h = *h;
+        return Ok(node.clone());
+    }
+    if depth > MAX_HEIGHT {
+        return Err(NonCanonical("sequence tree too deep"));
+    }
+    let bytes = loader.objects().get(id).ok_or(Missing(*id))?;
+    let node = if bytes.starts_with(LEAF_DOMAIN) || bytes.starts_with(PACKED_DOMAIN) {
+        let items = match T::PACKED {
+            None => {
+                let mut input = bytes
+                    .strip_prefix(LEAF_DOMAIN)
+                    .ok_or(Malformed("a packed leaf for another element type"))?;
+                let count = read_u16(&mut input)?;
+                let mut items = Vec::with_capacity(count.min(4096));
+                for _ in 0..count {
+                    items.push(T::decode(&mut input, loader)?);
+                }
+                if !input.is_empty() {
+                    return Err(Malformed("trailing bytes in a leaf"));
+                }
+                items
+            }
+            Some((tag, width)) => {
+                let mut input = bytes
+                    .strip_prefix(PACKED_DOMAIN)
+                    .ok_or(Malformed("an unpacked leaf for a packed element type"))?;
+                if read_bytes(&mut input, 2)? != [tag, width] {
+                    return Err(Malformed("a packed leaf of another element type"));
+                }
+                let count = read_u16(&mut input)?;
+                T::unpack(input, count)?
+            }
+        };
+        let n = items.len();
+        if n == 0 || n > st.p.max {
+            return Err(NonCanonical("a leaf of the wrong size"));
+        }
+        for (i, item) in items.iter().enumerate() {
+            st.h = (st.h << 1).wrapping_add(fingerprint(item));
+            let count = i + 1;
+            let cut =
+                (count >= st.p.min && cut_level(st.h, st.p.hit_bits) >= 0) || count == st.p.max;
+            if cut && count < n {
+                return Err(NonCanonical("a leaf continues past a cut"));
+            }
+            if !cut && count == n && !last {
+                return Err(NonCanonical("a leaf ends where there is no cut"));
+            }
+        }
+        leaf(items, cut_level(st.h, st.p.hit_bits))
+    } else {
+        let mut input = if T::MEASURES == 0 {
+            bytes.strip_prefix(BRANCH_DOMAIN)
+        } else {
+            bytes.strip_prefix(MEASURED_DOMAIN)
+        }
+        .ok_or(Malformed("not a node of this sequence type"))?;
+        let count = read_u16(&mut input)?;
+        if T::MEASURES > 0 && read_bytes(&mut input, 1)?[0] as usize != T::MEASURES {
+            return Err(Malformed("a branch with another number of measures"));
+        }
+        if count == 0 || count > MAX_FANOUT {
+            return Err(NonCanonical("a branch of the wrong size"));
+        }
+        if input.len() != count * (40 + 8 * T::MEASURES) {
+            return Err(Malformed("a branch of the wrong length"));
+        }
+        let mut children: Vec<Arc<Node<T>>> = Vec::with_capacity(count);
+        for i in 0..count {
+            let len = read_u64(&mut input)?;
+            let mut sums = [0u64; MAX_MEASURES];
+            for s in &mut sums[..T::MEASURES] {
+                *s = read_u64(&mut input)?;
+            }
+            let child_id: Identity = read_bytes(&mut input, 32)?.try_into().expect("32 bytes");
+            let c = load_node(&child_id, loader, st, last && i + 1 == count, depth + 1)?;
+            if c.len() as u64 != len || c.sums() != &sums[..T::MEASURES] {
+                return Err(NonCanonical("a child's recorded length or measures differ"));
+            }
+            if children.first().is_some_and(|f| f.height() != c.height()) {
+                return Err(NonCanonical("children of mixed heights"));
+            }
+            children.push(c);
+        }
+        let level = children[0].height() + 1;
+        for (i, c) in children.iter().enumerate() {
+            let cut = group_cut(i + 1, c.end(), level);
+            if cut && i + 1 < count {
+                return Err(NonCanonical("a branch continues past a cut"));
+            }
+            if !cut && i + 1 == count && !last {
+                return Err(NonCanonical("a branch ends where there is no cut"));
+            }
+        }
+        branch(children)
+    };
+    // The bytes hash to `id`, and the node writes them back exactly: its
+    // children's lengths, measures and identities were checked against them.
+    let (Node::Leaf { identity, .. } | Node::Branch { identity, .. }) = &*node;
+    let _ = identity.set(*id);
+    st.memo.insert(key, (node.clone(), st.h));
+    Ok(node)
+}
+
+impl<T: Clone + Identify + Decode> Sequence<T> {
+    /// Reads back the sequence whose identity is `id` from `objects`.
+    ///
+    /// The tree is checked to be the one its elements build, cut where the
+    /// rolling hash says, so the result is a well-formed sequence whatever
+    /// the bytes, and edits to it behave as on the sequence that was saved.
+    /// The loaded sequence has its identities already cached.
+    ///
+    /// The work is at most proportional to the sequence's length, however few
+    /// objects describe it, since repeated subtrees can describe a long
+    /// sequence in a few objects. The length is in the sequence's own object,
+    /// the first eight bytes after its domain, for a reader of untrusted data
+    /// to check before loading.
+    pub fn load(id: &Identity, objects: &Objects) -> Result<Self, DecodeError> {
+        Self::load_with(id, &mut Loader::new(objects))
+    }
+
+    /// Like [`load`](Self::load), within an existing [`Loader`], so that
+    /// nested maps and sequences are shared across several loads.
+    pub fn load_with(id: &Identity, loader: &mut Loader<'_>) -> Result<Self, DecodeError> {
+        use DecodeError::{Malformed, Missing, NonCanonical};
+        let bytes = loader.objects().get(id).ok_or(Missing(*id))?;
+        let mut input = bytes
+            .strip_prefix(SEQUENCE_DOMAIN)
+            .ok_or(Malformed("not a sequence"))?;
+        let len = read_u64(&mut input)?;
+        if len == 0 {
+            return if input.is_empty() {
+                Ok(Sequence::new())
+            } else {
+                Err(Malformed("trailing bytes after an empty sequence"))
+            };
+        }
+        let root_id: Identity = read_bytes(&mut input, 32)?.try_into().expect("32 bytes");
+        if !input.is_empty() {
+            return Err(Malformed("trailing bytes after a sequence"));
+        }
+        let mut st = Load {
+            p: params::<T>(),
+            h: 0,
+            memo: HashMap::new(),
+        };
+        let root = load_node(&root_id, loader, &mut st, true, 0)?;
+        if root.len() as u64 != len {
+            return Err(NonCanonical("a sequence's recorded length differs"));
+        }
+        if let Node::Branch { children, .. } = &*root
+            && children.len() < MIN_FANOUT
+        {
+            return Err(NonCanonical("a root branch with one child"));
+        }
+        Ok(Sequence { root: Some(root) })
+    }
+}
+
+impl<T: Clone + Identify + Decode + 'static> Decode for Sequence<T> {
+    /// Reads a nested sequence reference (tag `v`) and loads the sequence it
+    /// names, once per load however often it occurs.
+    fn decode(input: &mut &[u8], loader: &mut Loader<'_>) -> Result<Self, DecodeError> {
+        let id = read_identity(input, b'v')?;
+        loader.nested(id, |l| Sequence::load_with(&id, l))
+    }
 }
 
 impl<T: Clone + Identify + PartialEq> PartialEq for Sequence<T> {
@@ -1008,6 +1284,21 @@ impl Identify for TextByte {
         if self.0 == b'\n' {
             sums[1] += 1;
         }
+    }
+}
+
+impl Decode for TextByte {
+    fn decode(input: &mut &[u8], _: &mut Loader<'_>) -> Result<Self, DecodeError> {
+        match crate::read_tagged(input, b's')? {
+            [b] => Ok(TextByte(*b)),
+            _ => Err(DecodeError::Malformed("wrong payload length")),
+        }
+    }
+    fn unpack(bytes: &[u8], count: usize) -> Result<Vec<Self>, DecodeError> {
+        if bytes.len() != count {
+            return Err(DecodeError::Malformed("packed bytes of the wrong length"));
+        }
+        Ok(bytes.iter().map(|&b| TextByte(b)).collect())
     }
 }
 

@@ -36,9 +36,9 @@ elements.
 `pack::encode(roots, &objects)` and `pack::decode(bytes)`, which returns the
 roots and the objects.
 
-Maps can be stored as bytes and loaded back. The identity format is unchanged:
-every identity computed by 0.1 is the same in 0.2, and the golden vectors are
-the same.
+Maps, sets and sequences can be stored as bytes and loaded back. The
+identity format is unchanged: every identity computed by 0.1 is the same in
+0.2, and the golden vectors are the same.
 
 **Breaking:** `Identify::identify` writes into a generic `Sink` instead of a
 `sha2::Sha256`, so that the same encoder produces identities and stored bytes.
@@ -60,11 +60,19 @@ Added:
   `write_tagged` and `read_tagged` for the provided encoding shape.
 - `Identify::save_objects`, a default no-op, which nested maps and sets use to
   store their own trees.
-- `Decode`, implemented for every provided type and for nested maps and sets.
+- `Decode`, implemented for every provided type and for nested maps, sets
+  and sequences. `Decode::unpack`, whose default rejects, reads the elements
+  of a sequence's packed leaf; the fixed-width numbers and `TextByte`
+  implement it.
 - `Objects`, a set of stored objects keyed by the SHA-256 of their bytes.
 - `ChampMap::save`/`load`/`load_with` and `ChampSet::save`/`load`/`load_with`.
   Loading checks every node for canonical form, shares nested maps that occur
   more than once, and limits nesting to `codec::MAX_NESTING`.
+- `Sequence::save`/`load`/`load_with`. A sequence is stored as its identity
+  preimage, and its nodes as theirs. Loading accepts only the canonical tree,
+  checking every node against the cut rules with the rolling hash, which
+  also recomputes the end levels edits rely on, and loads a repeated subtree
+  once (FORMAT.md section 10.8).
 - `DecodeError` and `Loader`.
 - FORMAT.md section 9, "Stored form". Its preface now says that a change which
   alters an identity is a new format version, since this section adds to the

@@ -307,10 +307,31 @@ to each other, so a store keeps one copy; only the work is longer.
 ### 10.8 Nesting and storage
 
 A nested sequence encodes, through `Identify`, as the tag `v`, a `u64`
-length 32 and its identity, as a nested map is `m` (section 5). Its nodes
-are stored as their identity preimages, and packs (section 11) find a
-branch's children by their identities in its bytes. Loading a stored
-sequence is not yet provided.
+length 32 and its identity, as a nested map is `m` (section 5).
+
+A stored sequence is its identity preimage (section 10.5): the domain, its
+length, and its root's identity if it has one. So a sequence's identity
+names an object, and a nested sequence is found from its parent. Each node
+is stored as its identity preimage (section 10.4). Packs (section 11) find a
+sequence's root, and a branch's children, by their identities in its bytes.
+
+Loading reads the tree in element order and accepts only the canonical tree:
+
+- **Kinds.** Each node is of the kinds the element type gives: packed or
+  not, with the type's tag and width, and measured or not, with its number
+  of measures.
+- **Records.** Each branch's recorded lengths and measures are its
+  children's, and the sequence's recorded length is its root's.
+- **Cuts.** The rules of sections 10.2 and 10.3 hold: every leaf and branch
+  ends at its first cut, except one that ends the sequence, which may end
+  without a cut. A leaf holds at most `4W` elements, a branch 2 to 128
+  children (the last of a level may have one), and a root branch at least
+  two.
+
+A node's end level is not stored. Loading recomputes it with the rolling
+hash, which runs over the elements in order. A subtree that recurs with the
+same rolling hash before it, as in a run of equal chunks, is loaded once and
+shared.
 
 ## 11. Packs
 
