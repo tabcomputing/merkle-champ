@@ -2,18 +2,29 @@
 name = "merkle-champ"
 version = "0.2.0"
 edition = "2024"
-description = "Persistent CHAMP hash map and set, and a persistent vector, with canonical shape, cached Merkle identities, and structural diff"
+description = "Persistent CHAMP hash map and set, and a content-defined persistent sequence, with canonical shape, cached Merkle identities, structural diff, and packs"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/tabcomputing/merkle-champ"
 keywords = ["champ", "hamt", "vector", "persistent", "merkle"]
 categories = ["data-structures"]
 exclude = ["bench-results/"]
 
+[features]
+# Decompressing zstd pack members (FORMAT.md section 11.3): `zstd` uses the C
+# library, `ruzstd` is pure Rust, for wasm32. With both, `zstd` is used.
+# Writing compressed members needs neither.
+zstd = ["dep:zstd"]
+ruzstd = ["dep:ruzstd"]
+
 [dependencies]
 sha2 = "0.10"
+zstd = { version = "0.13", optional = true, default-features = false }
+ruzstd = { version = "0.9", optional = true }
 
 [dev-dependencies]
 imbl = "7.0"
+# Compressing members and training dictionaries in tests.
+zstd = { version = "0.13", features = ["zdict_builder"] }
 
 [profile.release]
 debug = false

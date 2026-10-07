@@ -27,6 +27,19 @@ nodes. `pack::Index` reads objects by range without I/O. MCHPACK1, transfs's
 first format from the `merkle-champ-pack` crate, is dropped: no stored packs
 needed it (Thomas, 2026-10-05).
 
+Packs may hold blobs compressed as zstd frames, identified by their
+uncompressed content (FORMAT.md section 11.3, agreed with transfs and
+Pandora on 2026-10-07). A header flag marks such packs, whose index entries
+grow to 64 bytes with each member's decoded length and encoding: raw, zstd,
+or zstd with a dictionary that is another member of the same pack. Packs
+without the flag are unchanged. `pack::encode_members` writes them from
+frames the caller has; `pack::read_member`, `pack::decode` and
+`pack::decode_with` read them with the new `zstd` (C) or `ruzstd` (pure
+Rust) feature, verifying SHA-256 by default, bounding decoded sizes
+(`ReadOptions`), and optionally trusting zstd checksums. `Index` gains
+`entries`, `entry` and `is_encoded`, and `Objects::extend` merges the
+objects of several packs.
+
 `Identify` gains `PACKED` and `pack`, with defaults, for sequences; existing
 implementations need no change. It is now implemented for `u8`, `u16`,
 `u32`, `i8`, `i16`, `i32`, `f32` and `f64` (tags `u`, `i`, `f`). Sequence

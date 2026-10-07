@@ -47,6 +47,17 @@ does no I/O). Objects are in a canonical order found without knowing what
 they are, so equal contents give byte-identical packs. Blobs can share a
 pack with nodes, each right after the first object that refers to it.
 
+A blob can be stored in a pack compressed, as a zstd frame, and keep the
+identity of its content (FORMAT.md, section 11.3), so the same chunk
+compressed two ways is still one object. A frame may use a zstd dictionary,
+itself a blob in the same pack. `pack::encode_members` writes such packs from
+frames the caller made, without compressing anything itself.
+`pack::read_member` and `pack::decode` read them with the `zstd` feature (the
+C library) or `ruzstd` (pure Rust, for wasm32). Reading checks each member's
+SHA-256 by default, refuses members larger than a set bound before
+allocating, and can rely on zstd's checksum instead for packs a program
+trusts. A pack without compressed members is unchanged, byte for byte.
+
 The identity format is specified in [FORMAT.md](FORMAT.md) and pinned by
 golden vectors. Keys and values must satisfy the consistency requirements in
 the crate documentation (equal keys hash equally, `Identify` is injective,

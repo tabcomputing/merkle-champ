@@ -362,11 +362,11 @@ the start of the pack.
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 8 | magic `MCHPACK2` |
-| 8 | 4 | flags, `u32`: 0; readers reject any other value |
+| 8 | 4 | flags, `u32`: bit 0, encoded members (section 11.3); readers reject any other bit |
 | 12 | 4 | root count R, `u32` |
 | 16 | 8 | object count N, `u64` |
 | 24 | 32R | the roots, unique, in the writer's order |
-| 24 + 32R | 48N | the index: per object, identity (32), offset (`u64`), length (`u64`) |
+| 24 + 32R | 48N | the index: per object, identity (32), offset (`u64`), length (`u64`); 64N with encoded members |
 | 24 + 32R + 48N | | the objects' bytes, in canonical order |
 
 - **The index** has one entry per object, in strictly increasing identity
@@ -431,6 +431,71 @@ writer and reader.
 Their data order is root, other, leaf, page. The pack is 414 bytes, and its
 SHA-256 is
 `2930478cf38da08f57e5c04ee04bcb47206ac28a83a2c54c963a5484e9d2b9d0`.
+
+### 11.3 Encoded members
+
+Agreed on 2026-10-07 between transfs, Pandora and March (`PACK-ENCODING.md`),
+so that blobs can be stored compressed and keep the identity of their
+uncompressed content. A pack whose flags have bit 0 set has **encoded
+members**, and its index entries are 64 bytes:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 32 | identity: SHA-256 of the object |
+| 32 | 8 | offset of the stored bytes, `u64` |
+| 40 | 8 | stored length, `u64` |
+| 48 | 8 | decoded length: the object's length, `u64` |
+| 56 | 1 | encoding: 0 raw, 1 zstd, 2 zstd with a dictionary |
+| 57 | 4 | dictionary, `u32`: for encoding 2, the position in the index of the dictionary's entry; otherwise 0 |
+| 61 | 3 | zero |
+
+**Encodings.**
+- **Raw (0).** The stored bytes are the object, as in section 11.2, and the
+  decoded length equals the stored length.
+- **zstd (1).** The member is a blob, and the stored bytes are its content
+  compressed as exactly one zstd frame (RFC 8878). The object is
+  `"merkle-champ/blob/v1"` followed by the decompressed content, so the
+  decoded length is the content's length plus 20. The frame records its
+  content size, which must equal that length, and names no dictionary. A
+  content checksum is optional and recommended.
+- **zstd with a dictionary (2).** As zstd, compressed with the dictionary in
+  the entry at the given position. That entry is a blob, raw or zstd, never
+  itself encoding 2, and its content is a zstd dictionary in the standard
+  format (magic `0xEC30A437`). If the frame names a dictionary ID, it is the
+  dictionary's.
+
+**Rules.**
+- **A dictionary is a member of every pack that uses it,** a delta pack
+  included: the rule that leaves out objects the reader already has does not
+  apply to it. A member names its dictionary by a position in its own pack,
+  so a pack always decodes and verifies on its own.
+- **A pack has the flag only if some member is encoded,** so a pack with
+  none has exactly one form, section 11.2's.
+- **Unknown values are rejected:** another encoding, a nonzero dictionary
+  field for encodings 0 and 1, and nonzero reserved bytes.
+
+**Order.** Section 11.2's canonical order holds, with references taken as
+follows:
+- a raw member's are found in its bytes, as before;
+- a zstd member has none, since it is a blob;
+- a member with a dictionary has one, its dictionary, which therefore lies
+  right after the first member that uses it.
+
+Nothing is decompressed to find the order.
+
+**Verification.** A reader decompresses an encoded member, checks that the
+decoded length and frame are as above, and checks the object's SHA-256
+against the index. It may instead rely on the frame's content checksum, but
+only for bytes it already trusts, such as a pack it wrote to its own disk:
+the checksum detects corruption, not substitution. The decoded length is
+declared before any data is read, so a reader can refuse a member larger
+than it expects before allocating.
+
+**Packs are unique per content and encoding.** The same objects compressed
+differently give different packs, with the same identities, order and
+decoded contents. A pack's **raw form**, every member decoded and written as
+in section 11.2, is the unique pack of its contents, the normal form for
+comparing packs.
 
 MCHPACK1, transfs's first format (big-endian, data in identity order, the
 index at the end), was dropped on 2026-10-05: no stored packs needed it.

@@ -93,6 +93,21 @@ impl Objects {
         self.map.entry(id).or_insert_with(|| bytes.into());
     }
 
+    /// Adds bytes read from a pack and checked there, by identity or, if
+    /// its reader chose, by a zstd frame's checksum.
+    pub(crate) fn insert_unchecked(&mut self, id: Identity, bytes: Vec<u8>) {
+        self.map.entry(id).or_insert_with(|| bytes.into());
+    }
+
+    /// Adds every object of `other`, as when combining several packs to load
+    /// a tree stored across them. Both sets hold objects already keyed by
+    /// their identities, so nothing is hashed again.
+    pub fn extend(&mut self, other: Objects) {
+        for (id, bytes) in other.map {
+            self.map.entry(id).or_insert(bytes);
+        }
+    }
+
     pub fn get(&self, id: &Identity) -> Option<&[u8]> {
         self.map.get(id).map(|b| &b[..])
     }

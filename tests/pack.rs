@@ -313,8 +313,12 @@ fn bad_packs_are_rejected() {
     assert_eq!(err(&p), "pack object identity mismatch");
     // Unknown flags, a bad magic, a short header, a truncated index.
     let mut p = pack.clone();
-    p[8] = 1;
+    p[8] = 2;
     assert_eq!(err(&p), "unknown pack flags");
+    // Bit 0, encoded members, on a pack whose index is not laid out for it.
+    let mut p = pack.clone();
+    p[8] = 1;
+    assert!(pack::decode(&p).is_err());
     let mut p = pack.clone();
     p[7] = b'1';
     assert_eq!(err(&p), "invalid pack header");
