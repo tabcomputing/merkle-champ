@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-10-09)
+
+The repository moved to github.com/openbohemians/merkle-champ; the old
+address redirects there.
 
 The crate gains a persistent sequence, `Sequence` (the `sequence` module),
 and the pack format that was the separate `merkle-champ-pack` crate (the
